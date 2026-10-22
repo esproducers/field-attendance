@@ -1,0 +1,1 @@
+{"name":"field-attendance-v2","version":"2.0.0","private":true,"type":"module","scripts":{"start":"node src/server.js","check":"node --check src/server.js"},"dependencies":{"fastify":"^5.2.0","@fastify/multipart":"^9.2.1","@fastify/cookie":"^11.0.2","pg":"^8.13.0"}}
