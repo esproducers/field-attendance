@@ -91,3 +91,5 @@ This revision simplifies the mobile Check In / Check Out forms, adds a View acti
 3. Run `docker compose up -d --build` from this project folder. The backend runs idempotent schema migrations at startup.
 4. Check `docker compose logs --tail=200 app` (or the backend service name in your Compose file) and verify `/health` before testing a new check-in and check-out.
 5. Do not use `docker compose down -v` during an update; it can delete the database volume.
+#   f i e l d - a t t e n d a n c e  
+ 
