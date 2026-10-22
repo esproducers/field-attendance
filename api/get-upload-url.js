@@ -1,34 +1,34 @@
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+import { S3Client } from '@aws-sdk/client-s3';
+import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { getAuthUser } from './_utils.js';
 
-// 💡 這裡完美對接你截圖中 Neon 最新推出的 Object storage (相容 S3 標準)
-const s3Client = new S3Client({
-    endpoint: process.env.NEON_STORAGE_ENDPOINT, // 例如 https://neon.tech
+// 请在 Vercel 环境变量中配置这些
+const s3 = new S3Client({
+    region: process.env.B2_REGION || 'us-west-004',
+    endpoint: process.env.B2_ENDPOINT,
     credentials: {
-        accessKeyId: process.env.NEON_STORAGE_KEY_ID,
-        secretAccessKey: process.env.NEON_STORAGE_APPLICATION_KEY,
-    },
-    region: 'ap-southeast-1', // 對應你選的 Singapore 地區
+        accessKeyId: process.env.B2_KEY_ID,
+        secretAccessKey: process.env.B2_APPLICATION_KEY,
+    }
 });
 
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
     try {
-        // 生成一個純隨機的唯一照片檔名
-        const filename = `${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+        await getAuthUser(req);
+        const filename = `photos/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
 
         const command = new PutObjectCommand({
-            Bucket: 'photo', // 對應你截圖裡寫的 Bucket name: image
+            Bucket: process.env.B2_BUCKET_NAME,
             Key: filename,
-            ContentType: 'photo/jpeg',
+            ContentType: 'image/jpeg'
         });
 
-        // 拿到通行證
-        const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 60 });
-        // 未來這張照片的真實公開/私有訪問網址
-        const downloadUrl = `${process.env.NEON_STORAGE_PUBLIC_BASE_URL}/${filename}`;
+        // 生成 15 分钟有效期的上传链接
+        const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+        // B2 的公开访问 URL (需在 B2 后台开启公开访问)
+        const downloadUrl = `${process.env.B2_PUBLIC_URL}/${filename}`;
 
-        return res.status(200).json({ success: true, uploadUrl, downloadUrl });
-    } catch (err) {
-        return res.status(500).json({ success: false, error: err.message });
-    }
-};
+        res.status(200).json({ uploadUrl, downloadUrl });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+}
