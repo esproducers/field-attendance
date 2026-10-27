@@ -126,7 +126,7 @@ async function showRecord(id) {
     let photos = [];
     try { photos = (await api(`/api/records/${id}/photos`)).photos } catch (e) { toast(e.message) }
     const bg = document.createElement('div'); bg.className = 'modalbg';
-    bg.innerHTML = `<div class="modal"><div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="closemodal">Close</button></div><p><strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email)})</p><p><strong>Site:</strong> ${esc(r.location_name || r.site_name)}</p><h3>Check In Information</h3><p><strong>Check-in time:</strong> ${fmt(r.check_in_device_at)}</p><p><strong>Check-in location:</strong> ${esc(r.location_name || r.site_name || '—')}</p><p><strong>Check-in GPS:</strong> ${esc(r.check_in_lat ?? '—')}, ${esc(r.check_in_lng ?? '—')} ${r.check_in_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_in_lat + ',' + r.check_in_lng)}">Map</a>` : ''}</p><p><strong>Check-in notes:</strong> ${esc(r.check_in_notes || r.notes || '—')}</p><h3>All Check-in Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'before').map(p => `<a target="_blank" href="/api/photo/${p.id}"><img class="thumb" src="/api/photo/${p.id}" alt="Before photo"></a>`).join('') || 'None'}</div><h3>Check Out Information</h3><p><strong>Check-out time:</strong> ${fmt(r.check_out_device_at)}</p><p><strong>Check-out location:</strong> ${esc(r.check_out_location_name || r.location_name || '—')}</p><p><strong>Check-out GPS:</strong> ${esc(r.check_out_lat ?? '—')}, ${esc(r.check_out_lng ?? '—')} ${r.check_out_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_out_lat + ',' + r.check_out_lng)}">Map</a>` : ''}</p><p><strong>Check-out notes:</strong> ${esc(r.check_out_notes || '—')}</p><h3>All Check-out Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'after').map(p => `<a target="_blank" href="/api/photo/${p.id}"><img class="thumb" src="/api/photo/${p.id}" alt="After photo"></a>`).join('') || 'None'}</div></div>`;
+    bg.innerHTML = `<div class="modal"><div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="closemodal">Close</button></div><p><strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email)})</p><p><strong>Site:</strong> ${esc(r.location_name || r.site_name)}</p><h3>Check In Information</h3><p><strong>Check-in time:</strong> ${fmt(r.check_in_device_at)}</p><p><strong>Check-in location:</strong> ${esc(r.location_name || r.site_name || '—')}</p><p><strong>Check-in GPS:</strong> ${esc(r.check_in_lat ?? '—')}, ${esc(r.check_in_lng ?? '—')} ${r.check_in_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_in_lat + ',' + r.check_in_lng)}">Map</a>` : ''}</p><p><strong>Check-in notes:</strong> ${esc(r.check_in_notes || r.notes || '—')}</p><h3>All Check-in Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'before').map(p => `<a target="_blank" href="${p.url}"><img class="thumb" src="${p.url}" alt="Before photo"></a>`).join('') || 'None'}</div><h3>Check Out Information</h3><p><strong>Check-out time:</strong> ${fmt(r.check_out_device_at)}</p><p><strong>Check-out location:</strong> ${esc(r.check_out_location_name || r.location_name || '—')}</p><p><strong>Check-out GPS:</strong> ${esc(r.check_out_lat ?? '—')}, ${esc(r.check_out_lng ?? '—')} ${r.check_out_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_out_lat + ',' + r.check_out_lng)}">Map</a>` : ''}</p><p><strong>Check-out notes:</strong> ${esc(r.check_out_notes || '—')}</p><h3>All Check-out Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'after').map(p => `<a target="_blank" href="${p.url}"><img class="thumb" src="${p.url}" alt="After photo"></a>`).join('') || 'None'}</div></div>`;
     document.body.append(bg);
     bg.querySelector('#closemodal').onclick = () => bg.remove();
     bg.onclick = e => { if (e.target === bg) bg.remove() };
@@ -485,13 +485,52 @@ function renderSettings() {
     };
 }
 
-function renderAuth(signup = false) {
-    app().innerHTML = `<div class="auth"><div class="authbox"><div class="brand" style="color:#14243b">${brandMarkup()}</div><h1>${signup ? 'Create Account' : 'Welcome Back'}</h1><p class="muted">${signup ? 'Register a field worker account' : 'Sign in to access attendance records'}</p><form id="authform">${signup ? '<div class="field"><label>Full Name</label><input name="full_name" required minlength="2"></div>' : ''}<div class="field"><label>Email</label><input name="email" type="email" required autocomplete="username"></div><div class="field"><label>Password (12+ characters)</label><input name="password" type="password" required minlength="12" autocomplete="${signup ? 'new-password' : 'current-password'}"></div><button class="btn" style="width:100%">${signup ? 'Create Account' : 'Sign In'}</button></form><p><button class="btn alt" id="toggle" style="width:100%">${signup ? 'Already registered? Sign In' : 'New user? Sign Up'}</button></p><p class="muted tiny">Internet is required for first login. Previously signed-in users can save attendance offline on this device.</p></div></div>`;
-    $('#toggle').onclick = () => renderAuth(!signup);
+// 🌟 修改点：加入 Reset 和 Forgot 视图
+function renderAuth(mode = 'login', token = '') {
+    const isSignup = mode === 'signup';
+    const isForgot = mode === 'forgot';
+    const isReset = mode === 'reset';
+
+    if (isForgot) {
+        app().innerHTML = `<div class="auth"><div class="authbox"><div class="brand" style="color:#14243b">${brandMarkup()}</div><h1>Reset Password</h1><p class="muted">Enter your email to receive a reset link.</p><form id="forgotform"><div class="field"><label>Email</label><input name="email" type="email" required autocomplete="username"></div><button class="btn" style="width:100%">Send Reset Link</button></form><p><button class="btn alt" id="back-to-login" style="width:100%">Back to Sign In</button></p><p class="muted tiny">Internet is required to reset your password.</p></div></div>`;
+        $('#back-to-login').onclick = () => renderAuth('login');
+        $('#forgotform').onsubmit = async e => {
+            e.preventDefault();
+            try {
+                await post('/api/forgot-password', { email: e.target.email.value.trim() });
+                toast('If an account exists, a reset link has been sent.');
+                renderAuth('login');
+            } catch (err) { toast(err.message) }
+        };
+        return;
+    }
+
+    if (isReset) {
+        app().innerHTML = `<div class="auth"><div class="authbox"><div class="brand" style="color:#14243b">${brandMarkup()}</div><h1>New Password</h1><p class="muted">Enter your new secure password.</p><form id="resetform"><div class="field"><label>New Password (12+ characters)</label><input name="password" type="password" minlength="12" required autocomplete="new-password"></div><button class="btn" style="width:100%">Update Password</button></form><p><button class="btn alt" id="back-to-login" style="width:100%">Back to Sign In</button></p></div></div>`;
+        $('#back-to-login').onclick = () => { window.history.replaceState({}, '', '/'); renderAuth('login'); };
+        $('#resetform').onsubmit = async e => {
+            e.preventDefault();
+            try {
+                await post('/api/reset-password', { token, new_password: e.target.password.value });
+                toast('Password updated successfully. Please sign in.');
+                window.history.replaceState({}, '', '/');
+                renderAuth('login');
+            } catch (err) { toast(err.message) }
+        };
+        return;
+    }
+
+    app().innerHTML = `<div class="auth"><div class="authbox"><div class="brand" style="color:#14243b">${brandMarkup()}</div><h1>${isSignup ? 'Create Account' : 'Welcome Back'}</h1><p class="muted">${isSignup ? 'Register a field worker account' : 'Sign in to access attendance records'}</p><form id="authform">${isSignup ? '<div class="field"><label>Full Name</label><input name="full_name" required minlength="2"></div>' : ''}<div class="field"><label>Email</label><input name="email" type="email" required autocomplete="username"></div><div class="field"><label>Password (12+ characters)</label><input name="password" type="password" required minlength="12" autocomplete="${isSignup ? 'new-password' : 'current-password'}"></div>${!isSignup ? `<div style="text-align: right; margin-bottom: 15px;"><button type="button" class="btn-link" id="forgot-btn" style="background:none; border:none; color:#2563eb; cursor:pointer; font-size:13px; text-decoration:underline;">Forgot Password?</button></div>` : ''}<button class="btn" style="width:100%">${isSignup ? 'Create Account' : 'Sign In'}</button></form><p><button class="btn alt" id="toggle" style="width:100%">${isSignup ? 'Already registered? Sign In' : 'New user? Sign Up'}</button></p><p class="muted tiny">Internet is required for first login. Previously signed-in users can save attendance offline on this device.</p></div></div>`;
+
+    $('#toggle').onclick = () => renderAuth(isSignup ? 'login' : 'signup');
+    if (!isSignup) {
+        $('#forgot-btn').onclick = () => renderAuth('forgot');
+    }
+
     $('#authform').onsubmit = async e => {
         e.preventDefault();
         try {
-            const d = await post(signup ? '/api/signup' : '/api/login', Object.fromEntries(new FormData(e.target)));
+            const d = await post(isSignup ? '/api/signup' : '/api/login', Object.fromEntries(new FormData(e.target)));
             user = d.user;
             localStorage.setItem('fa_user', JSON.stringify(user));
             view = 'overview';
@@ -527,6 +566,14 @@ async function refresh() {
 
 async function start() {
     if (!document.getElementById('app')) { document.addEventListener('DOMContentLoaded', start, { once: true }); return }
+
+    // 检查是否有重置密码的 Token
+    const urlParams = new URLSearchParams(window.location.search);
+    const resetToken = urlParams.get('reset_token');
+    if (resetToken) {
+        return renderAuth('reset', resetToken);
+    }
+
     try {
         for (const t of await all('queue')) {
             if (t.status === 'Failed') { t.status = 'Pending'; delete t.error; await put('queue', t) }

@@ -1,7 +1,6 @@
 import pg from 'pg';
-import { scryptSync, timingSafeEqual, randomBytes, createHash } from 'node:crypto';
-import { S3Client } from '@aws-sdk/client-s3';
-import { PutObjectCommand } from '@aws-sdk/client-s3';
+import { scryptSync, timingSafeEqual, randomBytes, createHash, randomUUID } from 'node:crypto';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // ================= 1. 基础配置与数据库 =================
@@ -14,7 +13,15 @@ const validEmail = e => typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.te
 const clean = (x, max = 500) => typeof x === 'string' ? x.trim().slice(0, max) : '';
 const uuid = s => typeof s === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
 
-// ================= 2. 鉴权工具 =================
+async function getBody(req) {
+    if (req.body && typeof req.body === 'object') return req.body;
+    return new Promise((resolve) => {
+        let data = '';
+        req.on('data', chunk => data += chunk);
+        req.on('end', () => { try { resolve(JSON.parse(data)); } catch { resolve({}); } });
+    });
+}
+
 async function getAuthUser(req) {
     const cookie = req.headers.cookie || '';
     const match = cookie.match(/fa_session=([^;]+)/);
@@ -31,44 +38,42 @@ async function requireAdmin(req) {
 
 // ================= 3. 主入口逻辑 =================
 export default async function handler(req, res) {
-    // 获取请求路径，例如 /api/login
     const url = new URL(req.url, `http://${req.headers.host}`);
-    const path = url.pathname.replace(/\/$/, ''); // 去掉末尾斜杠
+    const path = url.pathname.replace(/\/$/, '');
     const method = req.method;
 
     try {
-        // ---------------- Auth & Users ----------------
+        // --- 重置密码路由 (新增) ---
+        if (path === '/api/forgot-password' && method === 'POST') return handleForgotPassword(req, res);
+        if (path === '/api/reset-password' && method === 'POST') return handleResetPassword(req, res);
+
+        // --- 原有路由 ---
         if (path === '/api/signup' && method === 'POST') return handleSignup(req, res);
         if (path === '/api/login' && method === 'POST') return handleLogin(req, res);
         if (path === '/api/logout' && method === 'POST') return handleLogout(req, res);
         if (path === '/api/me' && method === 'GET') return handleMe(req, res);
         if (path === '/api/change-password' && method === 'POST') return handleChangePassword(req, res);
 
-        // ---------------- Core Data ----------------
         if (path === '/api/settings' && method === 'GET') return handleSettings(req, res);
         if (path === '/api/sites') return handleSites(req, res, method);
         if (path === '/api/records' && method === 'GET') return handleRecords(req, res);
         if (path === '/api/records/sync' && method === 'POST') return handleRecordSync(req, res);
 
-        // 动态路由: /api/records/[id]/photos
         const photosMatch = path.match(/^\/api\/records\/([0-9a-f-]+)\/photos$/i);
         if (photosMatch && method === 'GET') return handleRecordPhotos(req, res, photosMatch[1]);
 
         if (path === '/api/photos/orphan-bind' && method === 'POST') return handleOrphanBind(req, res);
         if (path === '/api/get-upload-url' && method === 'GET') return handleGetUploadUrl(req, res);
 
-        // ---------------- Admin ----------------
         if (path === '/api/admin/summary' && method === 'GET') return handleAdminSummary(req, res);
         if (path === '/api/admin/users' && method === 'GET') return handleAdminUsers(req, res);
         if (path === '/api/admin/audit' && method === 'GET') return handleAdminAudit(req, res);
         if (path === '/api/admin/settings' && method === 'PATCH') return handleAdminSettings(req, res);
         if (path === '/api/admin/export.csv' && method === 'GET') return handleExportCsv(req, res);
 
-        // 动态路由: /api/admin/users/[id]
         const userMatch = path.match(/^\/api\/admin\/users\/([0-9a-f-]+)$/i);
         if (userMatch && method === 'PATCH') return handleAdminUpdateUser(req, res, userMatch[1]);
 
-        // ---------------- Backup ----------------
         if (path === '/api/admin/backup/settings' && method === 'GET') return handleBackupSettings(req, res);
         if (path === '/api/admin/backup/schedule' && method === 'PATCH') return handleBackupSchedule(req, res);
         if (path === '/api/admin/backup/manual' && method === 'POST') return handleBackupManual(req, res);
@@ -81,10 +86,96 @@ export default async function handler(req, res) {
     }
 }
 
-// ================= 4. 各个路由的具体实现 =================
+// ================= 4. 具体实现 =================
+
+// 🌟 新增：发送重置密码邮件
+async function handleForgotPassword(req, res) {
+    const body = await getBody(req);
+    const { email } = body;
+    if (!validEmail(email)) return res.status(400).json({ error: 'Valid email required' });
+
+    const r = await pool.query('SELECT id, full_name FROM users WHERE email=$1 AND active=true', [email.toLowerCase().trim()]);
+    const user = r.rows[0];
+
+    // 即使用户不存在，也返回成功，防止恶意探测邮箱
+    if (!user) return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
+
+    // 生成随机 Token 和哈希
+    const rawToken = randomBytes(32).toString('hex');
+    const hashedToken = tokenHash(rawToken);
+
+    // 存入数据库，1 小时过期
+    await pool.query(`INSERT INTO password_reset_tokens(user_id, token_hash, expires_at) VALUES($1, $2, now() + interval '1 hour')`, [user.id, hashedToken]);
+
+    // 使用 Resend 发送邮件
+    const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/?reset_token=${rawToken}`;
+    const resendKey = process.env.RESEND_API_KEY;
+
+    if (resendKey) {
+        try {
+            const emailRes = await fetch('https://api.resend.com/emails', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    from: 'Field Attendance <onboarding@resend.dev>',
+                    to: [email],
+                    subject: 'Password Reset Request',
+                    html: `<p>Hello ${clean(user.full_name, 50)},</p><p>Click the link below to reset your password. This link is valid for 1 hour.</p><p><a href="${resetUrl}">Reset Password</a></p><p>If you didn't request this, ignore this email.</p>`
+                })
+            });
+            if (!emailRes.ok) console.error('Resend email failed:', await emailRes.text());
+        } catch (err) {
+            console.error('Failed to send email:', err);
+        }
+    } else {
+        console.log('⚠️ No RESEND_API_KEY configured. Reset URL:', resetUrl);
+    }
+
+    return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
+}
+
+// 🌟 新增：执行密码重置
+async function handleResetPassword(req, res) {
+    const body = await getBody(req);
+    const { token, new_password } = body;
+
+    if (!token || typeof new_password !== 'string' || new_password.length < 12) {
+        return res.status(400).json({ error: 'Invalid token or password too short' });
+    }
+
+    const hashedToken = tokenHash(token);
+
+    // 查找有效的 Token
+    const r = await pool.query(`SELECT id, user_id FROM password_reset_tokens WHERE token_hash=$1 AND expires_at > now() AND used_at IS NULL`, [hashedToken]);
+    const resetRecord = r.rows[0];
+
+    if (!resetRecord) return res.status(400).json({ error: 'Invalid or expired reset token' });
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        // 1. 更新密码
+        await client.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hashPass(new_password), resetRecord.user_id]);
+        // 2. 标记 Token 已使用
+        await client.query('UPDATE password_reset_tokens SET used_at=now() WHERE id=$1', [resetRecord.id]);
+        // 3. 注销所有旧 Session，强制重新登录
+        await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1', [resetRecord.user_id]);
+        await client.query('COMMIT');
+
+        return res.status(200).json({ ok: true, message: 'Password updated successfully' });
+    } catch (e) {
+        await client.query('ROLLBACK');
+        throw e;
+    } finally {
+        client.release();
+    }
+}
+
+// --- 以下为原有功能 ---
 
 async function handleSignup(req, res) {
-    const { email, password, full_name } = req.body || {};
+    const body = await getBody(req);
+    const { email, password, full_name } = body;
     if (!validEmail(email) || typeof password !== 'string' || password.length < 12 || clean(full_name, 100).length < 2) {
         return res.status(400).json({ error: 'Provide a name, valid email, and password of at least 12 characters' });
     }
@@ -93,16 +184,17 @@ async function handleSignup(req, res) {
         const u = r.rows[0];
         const token = randomBytes(32).toString('hex');
         await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-        res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+        res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Strict; Secure`);
         return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
     } catch (e) {
         if (e.code === '23505') return res.status(409).json({ error: 'Email already registered' });
-        throw e;
+        return res.status(500).json({ error: e.message });
     }
 }
 
 async function handleLogin(req, res) {
-    const { email, password } = req.body || {};
+    const body = await getBody(req);
+    const { email, password } = body;
     const r = await pool.query('SELECT * FROM users WHERE email=$1', [String(email || '').toLowerCase().trim()]);
     const u = r.rows[0];
     if (!u || !u.active || !checkPass(String(password || ''), u.password_hash)) {
@@ -110,7 +202,7 @@ async function handleLogin(req, res) {
     }
     const token = randomBytes(32).toString('hex');
     await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-    res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Strict${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`);
+    res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Strict; Secure`);
     return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
 }
 
@@ -129,7 +221,8 @@ async function handleMe(req, res) {
 
 async function handleChangePassword(req, res) {
     const u = await getAuthUser(req);
-    const { old_password, new_password } = req.body || {};
+    const body = await getBody(req);
+    const { old_password, new_password } = body;
     const r = await pool.query('SELECT password_hash FROM users WHERE id=$1', [u.id]);
     if (!checkPass(String(old_password || ''), r.rows[0].password_hash) || typeof new_password !== 'string' || new_password.length < 12) {
         return res.status(400).json({ error: 'Invalid current password or new password too short' });
@@ -153,9 +246,10 @@ async function handleSites(req, res, method) {
     }
     if (method === 'POST') {
         await requireAdmin(req);
-        const name = clean(req.body?.name, 120);
+        const body = await getBody(req);
+        const name = clean(body.name, 120);
         if (!name) return res.status(400).json({ error: 'Site name required' });
-        const r = await pool.query('INSERT INTO sites(name,address,latitude,longitude) VALUES($1,$2,$3,$4) RETURNING *', [name, clean(req.body?.address, 300), req.body?.latitude || null, req.body?.longitude || null]);
+        const r = await pool.query('INSERT INTO sites(name,address,latitude,longitude) VALUES($1,$2,$3,$4) RETURNING *', [name, clean(body.address, 300), body.latitude || null, body.longitude || null]);
         return res.status(200).json({ site: r.rows[0] });
     }
     return res.status(405).end();
@@ -173,14 +267,16 @@ async function handleRecords(req, res) {
 
 async function handleRecordSync(req, res) {
     const u = await getAuthUser(req);
-    const b = req.body || {};
+    const b = await getBody(req);
+
     if (!uuid(b.id)) return res.status(400).json({ error: 'Valid UUID required' });
     if (!['check_in', 'check_out'].includes(b.action)) return res.status(400).json({ error: 'Invalid action' });
 
-    const time = new Date(b.device_at).toISOString();
+    const time = b.device_at ? new Date(b.device_at).toISOString() : new Date().toISOString();
     const location = clean(b.location_name, 200);
     const lat = b.latitude || null;
     const lng = b.longitude || null;
+    const accuracy = b.accuracy || null;
     const photoUrls = b.photo_urls || [];
 
     const client = await pool.connect();
@@ -190,17 +286,21 @@ async function handleRecordSync(req, res) {
             const open = await client.query(`SELECT id FROM attendance_records WHERE user_id=$1 AND status='checked_in' AND id<>$2 LIMIT 1 FOR UPDATE`, [u.id, b.id]);
             if (open.rows.length) throw new Error('Please check out the current point before checking in at the next point');
 
-            await client.query(`INSERT INTO attendance_records(id,user_id,location_name,check_in_device_at,check_in_received_at,check_in_lat,check_in_lng,notes,status) 
-                                VALUES($1,$2,$3,$4,now(),$5,$6,$7,'checked_in') ON CONFLICT(id) DO NOTHING`, [b.id, u.id, location, time, lat, lng, clean(b.notes, 3000)]);
+            await client.query(`INSERT INTO attendance_records(id,user_id,location_name,check_in_device_at,check_in_received_at,check_in_lat,check_in_lng,check_in_accuracy,notes,status) 
+                                VALUES($1,$2,$3,$4,now(),$5,$6,$7,$8,'checked_in') ON CONFLICT(id) DO NOTHING`,
+                [b.id, u.id, location, time, lat, lng, accuracy, clean(b.notes, 3000)]);
 
             for (const url of photoUrls) {
-                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size) VALUES($1,$2,'before',$3,'image/jpeg',0)`, [crypto.randomUUID(), b.id, url]);
+                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'before',$3,'image/jpeg',0,$4)`,
+                    [randomUUID(), b.id, url, randomUUID()]);
             }
         } else {
-            await client.query(`UPDATE attendance_records SET check_out_device_at=$3,check_out_received_at=now(),check_out_lat=$4,check_out_lng=$5,check_out_location_name=$6,check_out_notes=$7,status='completed',updated_at=now() 
-                                WHERE id=$1 AND user_id=$2 AND check_out_device_at IS NULL`, [b.id, u.id, time, lat, lng, location, clean(b.notes, 3000)]);
+            await client.query(`UPDATE attendance_records SET check_out_device_at=$3,check_out_received_at=now(),check_out_lat=$4,check_out_lng=$5,check_out_accuracy=$6,check_out_location_name=$7,check_out_notes=$8,status='completed',updated_at=now() 
+                                WHERE id=$1 AND user_id=$2 AND check_out_device_at IS NULL`,
+                [b.id, u.id, time, lat, lng, accuracy, location, clean(b.notes, 3000)]);
             for (const url of photoUrls) {
-                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size) VALUES($1,$2,'after',$3,'image/jpeg',0)`, [crypto.randomUUID(), b.id, url]);
+                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'after',$3,'image/jpeg',0,$4)`,
+                    [randomUUID(), b.id, url, randomUUID()]);
             }
         }
         await client.query('COMMIT');
@@ -220,13 +320,14 @@ async function handleRecordPhotos(req, res, recordId) {
 }
 
 async function handleOrphanBind(req, res) {
-    const { recordId, url } = req.body || {};
-    await pool.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size) VALUES($1,$2,'after',$3,'image/jpeg',0)`, [crypto.randomUUID(), recordId, url]);
+    const body = await getBody(req);
+    const { recordId, url } = body;
+    await pool.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'after',$3,'image/jpeg',0,$4)`, [randomUUID(), recordId, url, randomUUID()]);
     return res.status(200).json({ ok: true });
 }
 
 async function handleGetUploadUrl(req, res) {
-    await getAuthUser(req); // 确保已登录
+    await getAuthUser(req);
     const s3 = new S3Client({
         region: process.env.B2_REGION || 'us-west-004',
         endpoint: process.env.B2_ENDPOINT,
@@ -235,7 +336,7 @@ async function handleGetUploadUrl(req, res) {
     const filename = `photos/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
     const command = new PutObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: filename, ContentType: 'image/jpeg' });
     const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
-    const downloadUrl = `${process.env.B2_PUBLIC_URL}/${filename}`;
+    const downloadUrl = `${process.env.B2_PUBLIC_URL.replace(/\/$/, '')}/${filename}`;
     return res.status(200).json({ uploadUrl, downloadUrl });
 }
 
@@ -256,12 +357,12 @@ async function handleAdminUsers(req, res) {
 
 async function handleAdminUpdateUser(req, res, userId) {
     const actor = await requireAdmin(req);
-    const b = req.body || {};
-    if (userId === actor.id && (b.active === false || b.role === 'user')) {
+    const body = await getBody(req);
+    if (userId === actor.id && (body.active === false || body.role === 'user')) {
         return res.status(400).json({ error: 'Cannot disable or demote your own admin account' });
     }
     const r = await pool.query('UPDATE users SET active=COALESCE($2,active),role=COALESCE($3,role),full_name=COALESCE($4,full_name) WHERE id=$1 RETURNING id,email,full_name,role,active',
-        [userId, typeof b.active === 'boolean' ? b.active : null, ['admin', 'user'].includes(b.role) ? b.role : null, b.full_name || null]);
+        [userId, typeof body.active === 'boolean' ? body.active : null, ['admin', 'user'].includes(body.role) ? body.role : null, body.full_name || null]);
     return res.status(200).json({ user: r.rows[0] });
 }
 
@@ -273,8 +374,9 @@ async function handleAdminAudit(req, res) {
 
 async function handleAdminSettings(req, res) {
     await requireAdmin(req);
-    const appName = req.body.appName || 'Field Attendance';
-    const logo = req.body.logo || '';
+    const body = await getBody(req);
+    const appName = body.appName || 'Field Attendance';
+    const logo = body.logo || '';
     await pool.query("INSERT INTO system_settings(key,value) VALUES('app_name',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(appName)]);
     await pool.query("INSERT INTO system_settings(key,value) VALUES('app_logo',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(logo)]);
     return res.status(200).json({ appName, logo });
@@ -298,7 +400,8 @@ async function handleBackupSettings(req, res) {
 
 async function handleBackupSchedule(req, res) {
     await requireAdmin(req);
-    const schedule = { enabled: !!req.body.enabled, time: req.body.time || '02:00', keep: Number(req.body.keep) || 14 };
+    const body = await getBody(req);
+    const schedule = { enabled: !!body.enabled, time: body.time || '02:00', keep: Number(body.keep) || 14 };
     await pool.query("INSERT INTO system_settings(key,value) VALUES('backup_schedule',$1::jsonb) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", [JSON.stringify(schedule)]);
     return res.status(200).json({ ok: true, schedule });
 }
@@ -317,7 +420,8 @@ async function handleBackupManual(req, res) {
 
 async function handleBackupClear(req, res) {
     await requireAdmin(req);
-    const { from, to, userId, location } = req.body;
+    const body = await getBody(req);
+    const { from, to, userId, location } = body;
     const values = [], clauses = [];
     if (from) { values.push(new Date(from + 'T00:00:00.000Z')); clauses.push(`a.created_at >= $${values.length}`); }
     if (to) { values.push(new Date(to + 'T23:59:59.999Z')); clauses.push(`a.created_at <= $${values.length}`); }
