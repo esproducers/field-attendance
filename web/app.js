@@ -22,6 +22,15 @@ async function api(url, opts = {}) {
         throw new Error('Server unavailable. Your saved offline records remain on this device.');
     }
     const body = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null;
+
+    if (response.status === 401) {
+        user = null;
+        localStorage.removeItem('fa_user');
+        if (view !== 'login' && view !== 'signup' && view !== 'forgot' && view !== 'reset') {
+            renderAuth();
+        }
+    }
+
     if (!response.ok) throw new Error(body?.error || `Request failed (${response.status})`);
     return body;
 }
@@ -287,12 +296,14 @@ async function saveAction(action, id, extra, gps, files) {
         await put('queue', task);
         for (const file of Array.from(files || [])) {
             const blob = await compress(file);
+            const buffer = await blob.arrayBuffer(); // 🌟 关键修改：转成 ArrayBuffer 存入
             await put('photos', {
                 id: uid(),
                 owner: user.id,
                 recordId: id,
                 phase: action === 'check_in' ? 'before' : 'after',
-                blob,
+                buffer: buffer, // 存 buffer
+                type: 'image/jpeg',
                 status: 'Pending',
                 created: Date.now()
             });
@@ -323,7 +334,9 @@ async function syncNow() {
                 for (const p of localPhotos) {
                     if (p.status === 'Synced') continue;
                     try {
-                        const cloudUrl = await uploadPhotoToB2(p.blob);
+                        // 🌟 关键修改：从 ArrayBuffer 还原为 Blob
+                        const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
+                        const cloudUrl = await uploadPhotoToB2(blob);
                         if (cloudUrl && !task.payload.photo_urls.includes(cloudUrl)) task.payload.photo_urls.push(cloudUrl);
                         await del('photos', p.id);
                     } catch (photoErr) {
@@ -346,7 +359,9 @@ async function syncNow() {
         const orphanPhotos = (await all('photos')).filter(p => p.owner === user.id);
         for (const p of orphanPhotos) {
             try {
-                const cloudUrl = await uploadPhotoToB2(p.blob);
+                // 🌟 关键修改：孤立照片也要从 ArrayBuffer 还原
+                const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
+                const cloudUrl = await uploadPhotoToB2(blob);
                 if (cloudUrl) {
                     try { await post('/api/photos/orphan-bind', { photoId: p.id, recordId: p.recordId, url: cloudUrl }) } catch { }
                     await del('photos', p.id);
@@ -367,7 +382,8 @@ async function syncNow() {
 
 async function renderSync() {
     const photos = (await all('photos')).filter(x => x.owner === user.id);
-    layout(`<section class="panel"><h2>Offline Synchronization</h2><p class="notice">Records and compressed photos are stored on this device until the server confirms receipt. Keep the app installed and do not clear browser data while uploads are pending.</p><div class="flex"><button class="btn" id="syncnow">Submit to Database</button><span class="muted">${queue.length} record actions · ${photos.length} photos pending</span></div><h3>Queued Actions</h3>${queue.map(t => `<div class="status">${pill(t.status)} ${esc(t.payload.action)} · ${esc(t.payload.location_name || t.payload.id)} · ${fmt(t.payload.device_at)} ${t.error ? `<div class="tiny offline">${esc(t.error)}</div>` : ''}</div>`).join('') || '<div class="empty">No pending record actions</div>'}<h3>Queued Photos</h3>${photos.map(p => `<div class="status">${pill(p.status)} ${esc(p.phase)} · ${Math.round(p.blob.size / 1024)} KB ${p.error ? esc(p.error) : ''}</div>`).join('') || '<div class="empty">No pending photos</div>'}</section>`);
+    // 🌟 修改显示逻辑，防止旧数据或新 buffer 导致页面报错
+    layout(`<section class="panel"><h2>Offline Synchronization</h2><p class="notice">Records and compressed photos are stored on this device until the server confirms receipt. Keep the app installed and do not clear browser data while uploads are pending.</p><div class="flex"><button class="btn" id="syncnow">Submit to Database</button><span class="muted">${queue.length} record actions · ${photos.length} photos pending</span></div><h3>Queued Actions</h3>${queue.map(t => `<div class="status">${pill(t.status)} ${esc(t.payload.action)} · ${esc(t.payload.location_name || t.payload.id)} · ${fmt(t.payload.device_at)} ${t.error ? `<div class="tiny offline">${esc(t.error)}</div>` : ''}</div>`).join('') || '<div class="empty">No pending record actions</div>'}<h3>Queued Photos</h3>${photos.map(p => `<div class="status">${pill(p.status)} ${esc(p.phase)} · ${Math.round((p.buffer ? p.buffer.byteLength : (p.blob ? p.blob.size : 0)) / 1024)} KB ${p.error ? esc(p.error) : ''}</div>`).join('') || '<div class="empty">No pending photos</div>'}</section>`);
     $('#syncnow').onclick = async () => { toast('Attempting synchronization...'); await syncNow(); toast('Synchronization attempt finished. Check pending items.') };
 }
 
@@ -485,7 +501,6 @@ function renderSettings() {
     };
 }
 
-// 🌟 修改点：加入 Reset 和 Forgot 视图
 function renderAuth(mode = 'login', token = '') {
     const isSignup = mode === 'signup';
     const isForgot = mode === 'forgot';
@@ -550,7 +565,27 @@ async function loadServerData() {
         users = u.users;
     }
 }
+async function loadServerData() {
+    try {
+        const results = await Promise.all([api('/api/records'), api('/api/sites')]);
+        records = results[0].records;
+        sites = results[1].sites;
+    } catch (e) {
+        console.warn('Failed to load records/sites', e);
+    }
 
+    if (user.role === 'admin') {
+        // 🌟 修复：独立加载，互不影响
+        try {
+            summary = await api('/api/admin/summary');
+        } catch (e) { console.warn('Summary failed', e); }
+
+        try {
+            const u = await api('/api/admin/users');
+            users = u.users;
+        } catch (e) { console.warn('Users failed', e); }
+    }
+}
 async function refresh() {
     if (!user) return;
     try {
@@ -567,7 +602,6 @@ async function refresh() {
 async function start() {
     if (!document.getElementById('app')) { document.addEventListener('DOMContentLoaded', start, { once: true }); return }
 
-    // 检查是否有重置密码的 Token
     const urlParams = new URLSearchParams(window.location.search);
     const resetToken = urlParams.get('reset_token');
     if (resetToken) {

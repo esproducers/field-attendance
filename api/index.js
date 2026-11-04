@@ -82,7 +82,11 @@ export default async function handler(req, res) {
         return res.status(404).json({ error: 'API Route Not Found' });
     } catch (e) {
         console.error('API Error:', e);
-        res.status(e.message.includes('sign in') ? 401 : e.message.includes('access') ? 403 : 500).json({ error: e.message || 'Server error' });
+        let status = 500;
+        if (e.message === 'Please sign in' || e.message === 'Session expired') status = 401;
+        else if (e.message === 'Administrator access required') status = 403;
+
+        res.status(status).json({ error: e.message || 'Server error' });
     }
 }
 
