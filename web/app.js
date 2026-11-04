@@ -556,16 +556,6 @@ function renderAuth(mode = 'login', token = '') {
 }
 
 async function loadServerData() {
-    const results = await Promise.all([api('/api/records'), api('/api/sites')]);
-    records = results[0].records;
-    sites = results[1].sites;
-    if (user.role === 'admin') {
-        const [s, u] = await Promise.all([api('/api/admin/summary'), api('/api/admin/users')]);
-        summary = s;
-        users = u.users;
-    }
-}
-async function loadServerData() {
     try {
         const results = await Promise.all([api('/api/records'), api('/api/sites')]);
         records = results[0].records;
@@ -586,6 +576,7 @@ async function loadServerData() {
         } catch (e) { console.warn('Users failed', e); }
     }
 }
+
 async function refresh() {
     if (!user) return;
     try {
