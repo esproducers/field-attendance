@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { scryptSync, timingSafeEqual, randomBytes, createHash, randomUUID } from 'node:crypto';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // ================= 1. 基础配置与数据库 =================
@@ -43,11 +43,8 @@ export default async function handler(req, res) {
     const method = req.method;
 
     try {
-        // --- 重置密码路由 (新增) ---
         if (path === '/api/forgot-password' && method === 'POST') return handleForgotPassword(req, res);
         if (path === '/api/reset-password' && method === 'POST') return handleResetPassword(req, res);
-
-        // --- 原有路由 ---
         if (path === '/api/signup' && method === 'POST') return handleSignup(req, res);
         if (path === '/api/login' && method === 'POST') return handleLogin(req, res);
         if (path === '/api/logout' && method === 'POST') return handleLogout(req, res);
@@ -63,7 +60,10 @@ export default async function handler(req, res) {
         if (photosMatch && method === 'GET') return handleRecordPhotos(req, res, photosMatch[1]);
 
         if (path === '/api/photos/orphan-bind' && method === 'POST') return handleOrphanBind(req, res);
+
+        // B2 相关路由
         if (path === '/api/get-upload-url' && method === 'GET') return handleGetUploadUrl(req, res);
+        if (path === '/api/get-download-url' && method === 'POST') return handleGetDownloadUrl(req, res);
 
         if (path === '/api/admin/summary' && method === 'GET') return handleAdminSummary(req, res);
         if (path === '/api/admin/users' && method === 'GET') return handleAdminUsers(req, res);
@@ -85,14 +85,12 @@ export default async function handler(req, res) {
         let status = 500;
         if (e.message === 'Please sign in' || e.message === 'Session expired') status = 401;
         else if (e.message === 'Administrator access required') status = 403;
-
         res.status(status).json({ error: e.message || 'Server error' });
     }
 }
 
 // ================= 4. 具体实现 =================
 
-// 🌟 新增：发送重置密码邮件
 async function handleForgotPassword(req, res) {
     const body = await getBody(req);
     const { email } = body;
@@ -100,82 +98,58 @@ async function handleForgotPassword(req, res) {
 
     const r = await pool.query('SELECT id, full_name FROM users WHERE email=$1 AND active=true', [email.toLowerCase().trim()]);
     const user = r.rows[0];
-
-    // 即使用户不存在，也返回成功，防止恶意探测邮箱
     if (!user) return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
 
-    // 生成随机 Token 和哈希
     const rawToken = randomBytes(32).toString('hex');
     const hashedToken = tokenHash(rawToken);
-
-    // 存入数据库，1 小时过期
     await pool.query(`INSERT INTO password_reset_tokens(user_id, token_hash, expires_at) VALUES($1, $2, now() + interval '1 hour')`, [user.id, hashedToken]);
 
-    // 使用 Resend 发送邮件
     const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/?reset_token=${rawToken}`;
     const resendKey = process.env.RESEND_API_KEY;
 
     if (resendKey) {
         try {
-            const emailRes = await fetch('https://api.resend.com/emails', {
+            await fetch('https://api.resend.com/emails', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     from: 'Field Attendance <onboarding@resend.dev>',
                     to: [email],
                     subject: 'Password Reset Request',
-                    html: `<p>Hello ${clean(user.full_name, 50)},</p><p>Click the link below to reset your password. This link is valid for 1 hour.</p><p><a href="${resetUrl}">Reset Password</a></p><p>If you didn't request this, ignore this email.</p>`
+                    html: `<p>Hello ${clean(user.full_name, 50)},</p><p>Click the link below to reset your password. This link is valid for 1 hour.</p><p><a href="${resetUrl}">Reset Password</a></p>`
                 })
             });
-            if (!emailRes.ok) console.error('Resend email failed:', await emailRes.text());
-        } catch (err) {
-            console.error('Failed to send email:', err);
-        }
+        } catch (err) { console.error('Failed to send email:', err); }
     } else {
         console.log('⚠️ No RESEND_API_KEY configured. Reset URL:', resetUrl);
     }
-
     return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
 }
 
-// 🌟 新增：执行密码重置
 async function handleResetPassword(req, res) {
     const body = await getBody(req);
     const { token, new_password } = body;
-
     if (!token || typeof new_password !== 'string' || new_password.length < 12) {
         return res.status(400).json({ error: 'Invalid token or password too short' });
     }
-
     const hashedToken = tokenHash(token);
-
-    // 查找有效的 Token
     const r = await pool.query(`SELECT id, user_id FROM password_reset_tokens WHERE token_hash=$1 AND expires_at > now() AND used_at IS NULL`, [hashedToken]);
     const resetRecord = r.rows[0];
-
     if (!resetRecord) return res.status(400).json({ error: 'Invalid or expired reset token' });
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        // 1. 更新密码
         await client.query('UPDATE users SET password_hash=$1 WHERE id=$2', [hashPass(new_password), resetRecord.user_id]);
-        // 2. 标记 Token 已使用
         await client.query('UPDATE password_reset_tokens SET used_at=now() WHERE id=$1', [resetRecord.id]);
-        // 3. 注销所有旧 Session，强制重新登录
         await client.query('UPDATE sessions SET revoked_at=now() WHERE user_id=$1', [resetRecord.user_id]);
         await client.query('COMMIT');
-
         return res.status(200).json({ ok: true, message: 'Password updated successfully' });
     } catch (e) {
         await client.query('ROLLBACK');
         throw e;
-    } finally {
-        client.release();
-    }
+    } finally { client.release(); }
 }
-
-// --- 以下为原有功能 ---
 
 async function handleSignup(req, res) {
     const body = await getBody(req);
@@ -281,7 +255,7 @@ async function handleRecordSync(req, res) {
     const lat = b.latitude || null;
     const lng = b.longitude || null;
     const accuracy = b.accuracy || null;
-    const photoUrls = b.photo_urls || [];
+    const photoKeys = b.photo_urls || []; // 注意这里现在存的是 fileKey
 
     const client = await pool.connect();
     try {
@@ -294,17 +268,17 @@ async function handleRecordSync(req, res) {
                                 VALUES($1,$2,$3,$4,now(),$5,$6,$7,$8,'checked_in') ON CONFLICT(id) DO NOTHING`,
                 [b.id, u.id, location, time, lat, lng, accuracy, clean(b.notes, 3000)]);
 
-            for (const url of photoUrls) {
+            for (const key of photoKeys) {
                 await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'before',$3,'image/jpeg',0,$4)`,
-                    [randomUUID(), b.id, url, randomUUID()]);
+                    [randomUUID(), b.id, key, randomUUID()]);
             }
         } else {
             await client.query(`UPDATE attendance_records SET check_out_device_at=$3,check_out_received_at=now(),check_out_lat=$4,check_out_lng=$5,check_out_accuracy=$6,check_out_location_name=$7,check_out_notes=$8,status='completed',updated_at=now() 
                                 WHERE id=$1 AND user_id=$2 AND check_out_device_at IS NULL`,
                 [b.id, u.id, time, lat, lng, accuracy, location, clean(b.notes, 3000)]);
-            for (const url of photoUrls) {
+            for (const key of photoKeys) {
                 await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'after',$3,'image/jpeg',0,$4)`,
-                    [randomUUID(), b.id, url, randomUUID()]);
+                    [randomUUID(), b.id, key, randomUUID()]);
             }
         }
         await client.query('COMMIT');
@@ -312,9 +286,7 @@ async function handleRecordSync(req, res) {
     } catch (e) {
         await client.query('ROLLBACK');
         throw e;
-    } finally {
-        client.release();
-    }
+    } finally { client.release(); }
 }
 
 async function handleRecordPhotos(req, res, recordId) {
@@ -325,23 +297,53 @@ async function handleRecordPhotos(req, res, recordId) {
 
 async function handleOrphanBind(req, res) {
     const body = await getBody(req);
-    const { recordId, url } = body;
+    const { recordId, url } = body; // url 实际上是 fileKey
     await pool.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'after',$3,'image/jpeg',0,$4)`, [randomUUID(), recordId, url, randomUUID()]);
     return res.status(200).json({ ok: true });
 }
 
+// 🌟 修改：生成上传链接，返回 fileKey
 async function handleGetUploadUrl(req, res) {
-    await getAuthUser(req);
-    const s3 = new S3Client({
-        region: process.env.B2_REGION || 'us-west-004',
-        endpoint: process.env.B2_ENDPOINT,
-        credentials: { accessKeyId: process.env.B2_KEY_ID, secretAccessKey: process.env.B2_APPLICATION_KEY }
-    });
-    const filename = `photos/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
-    const command = new PutObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: filename, ContentType: 'image/jpeg' });
-    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
-    const downloadUrl = `${process.env.B2_PUBLIC_URL.replace(/\/$/, '')}/${filename}`;
-    return res.status(200).json({ uploadUrl, downloadUrl });
+    try {
+        await getAuthUser(req);
+        const s3 = new S3Client({
+            region: process.env.B2_REGION || 'us-west-004',
+            endpoint: process.env.B2_ENDPOINT,
+            credentials: { accessKeyId: process.env.B2_KEY_ID, secretAccessKey: process.env.B2_APPLICATION_KEY },
+            forcePathStyle: true
+        });
+        const fileKey = `photos/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+        const command = new PutObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: fileKey, ContentType: 'image/jpeg' });
+        const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+        return res.status(200).json({ uploadUrl, fileKey });
+    } catch (e) {
+        console.error('B2 Error:', e);
+        return res.status(500).json({ error: 'Cannot generate upload URL: ' + e.message });
+    }
+}
+
+// 🌟 新增：生成临时下载链接
+async function handleGetDownloadUrl(req, res) {
+    try {
+        await getAuthUser(req);
+        const body = await getBody(req);
+        const { fileKey } = body;
+        if (!fileKey) return res.status(400).json({ error: 'File key is required' });
+
+        const s3 = new S3Client({
+            region: process.env.B2_REGION || 'us-west-004',
+            endpoint: process.env.B2_ENDPOINT,
+            credentials: { accessKeyId: process.env.B2_KEY_ID, secretAccessKey: process.env.B2_APPLICATION_KEY },
+            forcePathStyle: true
+        });
+
+        const command = new GetObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: fileKey });
+        const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 }); // 15分钟有效
+        return res.status(200).json({ downloadUrl: presignedUrl });
+    } catch (e) {
+        console.error('B2 Download Error:', e);
+        return res.status(500).json({ error: 'Could not generate download URL' });
+    }
 }
 
 async function handleAdminSummary(req, res) {

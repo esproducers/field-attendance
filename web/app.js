@@ -133,9 +133,21 @@ function render() {
 async function showRecord(id) {
     const r = records.find(x => x.id === id); if (!r) return;
     let photos = [];
-    try { photos = (await api(`/api/records/${id}/photos`)).photos } catch (e) { toast(e.message) }
+    try {
+        photos = (await api(`/api/records/${id}/photos`)).photos;
+        // 🌟 循环获取临时下载链接
+        for (let p of photos) {
+            if (p.url) {
+                try {
+                    const { downloadUrl } = await post('/api/get-download-url', { fileKey: p.url });
+                    p.displayUrl = downloadUrl;
+                } catch (e) { console.warn('URL fetch failed', e); p.displayUrl = ''; }
+            }
+        }
+    } catch (e) { toast(e.message) }
+
     const bg = document.createElement('div'); bg.className = 'modalbg';
-    bg.innerHTML = `<div class="modal"><div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="closemodal">Close</button></div><p><strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email)})</p><p><strong>Site:</strong> ${esc(r.location_name || r.site_name)}</p><h3>Check In Information</h3><p><strong>Check-in time:</strong> ${fmt(r.check_in_device_at)}</p><p><strong>Check-in location:</strong> ${esc(r.location_name || r.site_name || '—')}</p><p><strong>Check-in GPS:</strong> ${esc(r.check_in_lat ?? '—')}, ${esc(r.check_in_lng ?? '—')} ${r.check_in_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_in_lat + ',' + r.check_in_lng)}">Map</a>` : ''}</p><p><strong>Check-in notes:</strong> ${esc(r.check_in_notes || r.notes || '—')}</p><h3>All Check-in Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'before').map(p => `<a target="_blank" href="${p.url}"><img class="thumb" src="${p.url}" alt="Before photo"></a>`).join('') || 'None'}</div><h3>Check Out Information</h3><p><strong>Check-out time:</strong> ${fmt(r.check_out_device_at)}</p><p><strong>Check-out location:</strong> ${esc(r.check_out_location_name || r.location_name || '—')}</p><p><strong>Check-out GPS:</strong> ${esc(r.check_out_lat ?? '—')}, ${esc(r.check_out_lng ?? '—')} ${r.check_out_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_out_lat + ',' + r.check_out_lng)}">Map</a>` : ''}</p><p><strong>Check-out notes:</strong> ${esc(r.check_out_notes || '—')}</p><h3>All Check-out Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'after').map(p => `<a target="_blank" href="${p.url}"><img class="thumb" src="${p.url}" alt="After photo"></a>`).join('') || 'None'}</div></div>`;
+    bg.innerHTML = `<div class="modal"><div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="closemodal">Close</button></div><p><strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email)})</p><p><strong>Site:</strong> ${esc(r.location_name || r.site_name)}</p><h3>Check In Information</h3><p><strong>Check-in time:</strong> ${fmt(r.check_in_device_at)}</p><p><strong>Check-in location:</strong> ${esc(r.location_name || r.site_name || '—')}</p><p><strong>Check-in GPS:</strong> ${esc(r.check_in_lat ?? '—')}, ${esc(r.check_in_lng ?? '—')} ${r.check_in_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_in_lat + ',' + r.check_in_lng)}">Map</a>` : ''}</p><p><strong>Check-in notes:</strong> ${esc(r.check_in_notes || r.notes || '—')}</p><h3>All Check-in Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'before').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Before photo"></a>`).join('') || 'None'}</div><h3>Check Out Information</h3><p><strong>Check-out time:</strong> ${fmt(r.check_out_device_at)}</p><p><strong>Check-out location:</strong> ${esc(r.check_out_location_name || r.location_name || '—')}</p><p><strong>Check-out GPS:</strong> ${esc(r.check_out_lat ?? '—')}, ${esc(r.check_out_lng ?? '—')} ${r.check_out_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_out_lat + ',' + r.check_out_lng)}">Map</a>` : ''}</p><p><strong>Check-out notes:</strong> ${esc(r.check_out_notes || '—')}</p><h3>All Check-out Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'after').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="After photo"></a>`).join('') || 'None'}</div></div>`;
     document.body.append(bg);
     bg.querySelector('#closemodal').onclick = () => bg.remove();
     bg.onclick = e => { if (e.target === bg) bg.remove() };
@@ -279,13 +291,14 @@ async function compress(file) {
     return blob;
 }
 
+// 🌟 修改：上传后返回 fileKey
 async function uploadPhotoToB2(fileBlob) {
     if (!fileBlob) return null;
     if (!navigator.onLine) throw new Error('Offline mode detected during B2 upload activation');
-    const { uploadUrl, downloadUrl } = await api('/api/get-upload-url');
+    const { uploadUrl, fileKey } = await api('/api/get-upload-url');
     const b2Response = await fetch(uploadUrl, { method: 'PUT', body: fileBlob, headers: { 'Content-Type': 'image/jpeg' } });
     if (!b2Response.ok) throw new Error('Failed to push photo to Backblaze B2.');
-    return downloadUrl;
+    return fileKey; // 返回 key
 }
 
 async function saveAction(action, id, extra, gps, files) {
@@ -336,8 +349,8 @@ async function syncNow() {
                     try {
                         // 🌟 关键修改：从 ArrayBuffer 还原为 Blob
                         const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
-                        const cloudUrl = await uploadPhotoToB2(blob);
-                        if (cloudUrl && !task.payload.photo_urls.includes(cloudUrl)) task.payload.photo_urls.push(cloudUrl);
+                        const cloudKey = await uploadPhotoToB2(blob);
+                        if (cloudKey && !task.payload.photo_urls.includes(cloudKey)) task.payload.photo_urls.push(cloudKey);
                         await del('photos', p.id);
                     } catch (photoErr) {
                         p.status = 'Failed';
@@ -359,11 +372,10 @@ async function syncNow() {
         const orphanPhotos = (await all('photos')).filter(p => p.owner === user.id);
         for (const p of orphanPhotos) {
             try {
-                // 🌟 关键修改：孤立照片也要从 ArrayBuffer 还原
                 const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
-                const cloudUrl = await uploadPhotoToB2(blob);
-                if (cloudUrl) {
-                    try { await post('/api/photos/orphan-bind', { photoId: p.id, recordId: p.recordId, url: cloudUrl }) } catch { }
+                const cloudKey = await uploadPhotoToB2(blob);
+                if (cloudKey) {
+                    try { await post('/api/photos/orphan-bind', { photoId: p.id, recordId: p.recordId, url: cloudKey }) } catch { }
                     await del('photos', p.id);
                 }
             } catch (e) {
@@ -382,7 +394,6 @@ async function syncNow() {
 
 async function renderSync() {
     const photos = (await all('photos')).filter(x => x.owner === user.id);
-    // 🌟 修改显示逻辑，防止旧数据或新 buffer 导致页面报错
     layout(`<section class="panel"><h2>Offline Synchronization</h2><p class="notice">Records and compressed photos are stored on this device until the server confirms receipt. Keep the app installed and do not clear browser data while uploads are pending.</p><div class="flex"><button class="btn" id="syncnow">Submit to Database</button><span class="muted">${queue.length} record actions · ${photos.length} photos pending</span></div><h3>Queued Actions</h3>${queue.map(t => `<div class="status">${pill(t.status)} ${esc(t.payload.action)} · ${esc(t.payload.location_name || t.payload.id)} · ${fmt(t.payload.device_at)} ${t.error ? `<div class="tiny offline">${esc(t.error)}</div>` : ''}</div>`).join('') || '<div class="empty">No pending record actions</div>'}<h3>Queued Photos</h3>${photos.map(p => `<div class="status">${pill(p.status)} ${esc(p.phase)} · ${Math.round((p.buffer ? p.buffer.byteLength : (p.blob ? p.blob.size : 0)) / 1024)} KB ${p.error ? esc(p.error) : ''}</div>`).join('') || '<div class="empty">No pending photos</div>'}</section>`);
     $('#syncnow').onclick = async () => { toast('Attempting synchronization...'); await syncNow(); toast('Synchronization attempt finished. Check pending items.') };
 }
@@ -565,7 +576,6 @@ async function loadServerData() {
     }
 
     if (user.role === 'admin') {
-        // 🌟 修复：独立加载，互不影响
         try {
             summary = await api('/api/admin/summary');
         } catch (e) { console.warn('Summary failed', e); }
