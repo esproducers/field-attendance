@@ -61,7 +61,7 @@ export default async function handler(req, res) {
 
         if (path === '/api/photos/orphan-bind' && method === 'POST') return handleOrphanBind(req, res);
 
-        // B2 相关路由
+        // 🌟 Neon 对象存储相关路由
         if (path === '/api/get-upload-url' && method === 'GET') return handleGetUploadUrl(req, res);
         if (path === '/api/get-download-url' && method === 'POST') return handleGetDownloadUrl(req, res);
 
@@ -302,27 +302,34 @@ async function handleOrphanBind(req, res) {
     return res.status(200).json({ ok: true });
 }
 
-// 🌟 修改：生成上传链接，返回 fileKey
+// 🌟 修改：使用 Neon 对象存储生成上传链接
 async function handleGetUploadUrl(req, res) {
     try {
         await getAuthUser(req);
         const s3 = new S3Client({
-            region: process.env.B2_REGION || 'us-west-004',
-            endpoint: process.env.B2_ENDPOINT,
-            credentials: { accessKeyId: process.env.B2_KEY_ID, secretAccessKey: process.env.B2_APPLICATION_KEY },
-            forcePathStyle: true
+            region: process.env.AWS_REGION || 'us-east-2',
+            endpoint: process.env.AWS_ENDPOINT_URL_S3,
+            credentials: {
+                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+            },
+            forcePathStyle: true, // Neon 必须使用路径风格
         });
         const fileKey = `photos/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
-        const command = new PutObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: fileKey, ContentType: 'image/jpeg' });
+        const command = new PutObjectCommand({
+            Bucket: process.env.AWS_BUCKET_NAME,
+            Key: fileKey,
+            ContentType: 'image/jpeg'
+        });
         const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
         return res.status(200).json({ uploadUrl, fileKey });
     } catch (e) {
-        console.error('B2 Error:', e);
+        console.error('Neon Upload URL Error:', e);
         return res.status(500).json({ error: 'Cannot generate upload URL: ' + e.message });
     }
 }
 
-// 🌟 新增：生成临时下载链接
+// 🌟 修改：使用 Neon 对象存储生成临时下载链接
 async function handleGetDownloadUrl(req, res) {
     try {
         await getAuthUser(req);
@@ -331,17 +338,23 @@ async function handleGetDownloadUrl(req, res) {
         if (!fileKey) return res.status(400).json({ error: 'File key is required' });
 
         const s3 = new S3Client({
-            region: process.env.B2_REGION || 'us-west-004',
-            endpoint: process.env.B2_ENDPOINT,
-            credentials: { accessKeyId: process.env.B2_KEY_ID, secretAccessKey: process.env.B2_APPLICATION_KEY },
-            forcePathStyle: true
+            region: process.env.AWS_REGION || 'us-east-2',
+            endpoint: process.env.AWS_ENDPOINT_URL_S3,
+            credentials: {
+                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+            },
+            forcePathStyle: true, // Neon 必须使用路径风格
         });
 
-        const command = new GetObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: fileKey });
+        const command = new GetObjectCommand({
+            Bucket: process.env.AWS_BUCKET_NAME,
+            Key: fileKey
+        });
         const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 }); // 15分钟有效
         return res.status(200).json({ downloadUrl: presignedUrl });
     } catch (e) {
-        console.error('B2 Download Error:', e);
+        console.error('Neon Download Error:', e);
         return res.status(500).json({ error: 'Could not generate download URL' });
     }
 }
