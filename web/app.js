@@ -5,6 +5,9 @@ const uid = () => (self.crypto && crypto.randomUUID ? crypto.randomUUID() : 'id-
 let user = null, view = 'overview', records = [], users = [], sites = [], summary = {}, queue = [], syncing = false, selected = null, selectedCheckoutId = null, branding = { appName: 'Field Attendance', logo: '' };
 const app = () => document.getElementById('app');
 
+// 判断是否为移动设备，限制电脑端打开文件夹
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
 function toast(m) { const t = $('#toast'); if (!t) return; t.textContent = m; t.style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = 'none', 4500) }
 
 async function api(url, opts = {}) {
@@ -242,42 +245,64 @@ function renderCheck(mode = 'checkin') {
 
     if (mode === 'checkin') {
         const canCheckIn = active.length === 0;
-        layout(`<section class="panel"><div class="flex between"><h2>Check In Form</h2>${canCheckIn ? '<span class="pill ok">Ready to check in</span>' : '<span class="pill wait">Checkout required first</span>'}</div>${canCheckIn ? `<form id="checkin"><div class="field"><label>Check-in Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Location *</label><input name="location_name" required maxlength="200" placeholder="Enter location"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-in">Get GPS Location</button><span class="muted tiny" id="gps-in-status">Not captured</span></div></div><div class="field"><label>Location Photo *</label><button class="btn alt" type="button" id="camera-in">Take Location Photo</button><span class="muted tiny" id="camera-in-status"></span><div id="loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div></div><div class="field"><label>Before Photo(s) *</label><button class="btn alt" type="button" id="camera-in-more">Add Before Photo(s)</button><span class="muted tiny" id="camera-in-more-status">Photos are saved together</span><div id="before-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div></div><div class="field"><label>Condition Notes (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check In</button></form>` : `<p class="notice">You are currently checked in. Please complete Check Out before checking in at another point.</p><button class="btn" id="go-checkout">Go to Check Out Form</button>`}</section>`);
+        layout(`<section class="panel"><div class="flex between"><h2>Check In Form</h2>${canCheckIn ? '<span class="pill ok">Ready to check in</span>' : '<span class="pill wait">Checkout required first</span>'}</div>${canCheckIn ? `
+        <form id="checkin">
+            <div class="field"><label>Check-in Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div>
+            <div class="field"><label>Location *</label><input name="location_name" required maxlength="200" placeholder="Enter location"></div>
+            <div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-in">Get GPS Location</button><span class="muted tiny" id="gps-in-status">Not captured</span></div></div>
+            
+            <div class="field">
+                <label>Location Photo *</label>
+                <input type="file" id="file-input-loc" accept="image/*" capture="environment" style="display:none">
+                <button class="btn alt" type="button" id="camera-in">Take Location Photo</button>
+                <span class="muted tiny" id="camera-in-status"></span>
+                <div id="loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div>
+            </div>
+            
+            <div class="field">
+                <label>Before Photo(s) *</label>
+                <input type="file" id="file-input-before" accept="image/*" capture="environment" style="display:none">
+                <button class="btn alt" type="button" id="camera-in-more">Add Before Photo(s)</button>
+                <span class="muted tiny" id="camera-in-more-status">Photos are saved together</span>
+                <div id="before-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div>
+            </div>
+            
+            <div class="field"><label>Condition Notes (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div>
+            <button class="btn good" type="submit">Submit Check In</button>
+        </form>` : `<p class="notice">You are currently checked in. Please complete Check Out before checking in at another point.</p><button class="btn" id="go-checkout">Go to Check Out Form</button>`}</section>`);
+
         let gpsIn = null, locationPhoto = null, beforePhotos = [];
         const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
 
         $('#gps-in')?.addEventListener('click', () => getGps(g => { gpsIn = g; $('#gps-in-status').textContent = gpsText(g) }));
 
-        // 🌟 原生文件上传替代自定义相机
         $('#camera-in')?.addEventListener('click', () => {
-            const input = document.createElement('input');
-            input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
-            input.onchange = (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    locationPhoto = file;
-                    $('#camera-in-status').textContent = `1 location photo captured`;
-                    $('#loc-preview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
-                }
-            };
-            input.click();
+            if (!isMobile) return toast('拍照功能仅限手机端使用。电脑端请勿打卡。');
+            $('#file-input-loc').click();
+        });
+        $('#file-input-loc')?.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                locationPhoto = file;
+                $('#camera-in-status').textContent = `1 location photo captured`;
+                $('#loc-preview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
+            }
         });
 
         $('#camera-in-more')?.addEventListener('click', () => {
-            const input = document.createElement('input');
-            input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
-            input.onchange = (e) => {
-                const file = e.target.files[0];
-                if (file) {
-                    beforePhotos.push(file);
-                    $('#camera-in-more-status').textContent = `${beforePhotos.length} before photo(s) captured`;
-                    const img = document.createElement('img');
-                    img.src = URL.createObjectURL(file);
-                    img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
-                    $('#before-preview').appendChild(img);
-                }
-            };
-            input.click();
+            if (!isMobile) return toast('拍照功能仅限手机端使用。电脑端请勿打卡。');
+            $('#file-input-before').click();
+        });
+        $('#file-input-before')?.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                beforePhotos.push(file);
+                $('#camera-in-more-status').textContent = `${beforePhotos.length} before photo(s) captured`;
+                const img = document.createElement('img');
+                img.src = URL.createObjectURL(file);
+                img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
+                $('#before-preview').appendChild(img);
+            }
         });
 
         $('#go-checkout')?.addEventListener('click', () => { selectedCheckoutId = null; view = 'checkout'; render() });
@@ -302,38 +327,36 @@ function renderCheck(mode = 'checkin') {
             const form = $('#checkout'); if (!form) return;
             let gpsOut = null, checkoutLocPhoto = null, afterPhotos = [];
             const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
+
             $('#gps-out').onclick = () => getGps(g => { gpsOut = g; $('#gps-out-status').textContent = gpsText(g) });
 
-            // 🌟 原生文件上传替代自定义相机
             $('#camera-out').onclick = () => {
-                const input = document.createElement('input');
-                input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
-                input.onchange = (e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                        checkoutLocPhoto = file;
-                        $('#camera-out-status').textContent = `1 checkout location photo captured`;
-                        $('#out-loc-preview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
-                    }
-                };
-                input.click();
+                if (!isMobile) return toast('拍照功能仅限手机端使用。电脑端请勿打卡。');
+                $('#file-input-out-loc').click();
+            };
+            $('#file-input-out-loc').onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    checkoutLocPhoto = file;
+                    $('#camera-out-status').textContent = `1 checkout location photo captured`;
+                    $('#out-loc-preview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
+                }
             };
 
             $('#camera-out-more').onclick = () => {
-                const input = document.createElement('input');
-                input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
-                input.onchange = (e) => {
-                    const file = e.target.files[0];
-                    if (file) {
-                        afterPhotos.push(file);
-                        $('#camera-out-status').textContent = `${afterPhotos.length} after photo(s) captured`;
-                        const img = document.createElement('img');
-                        img.src = URL.createObjectURL(file);
-                        img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
-                        $('#after-preview').appendChild(img);
-                    }
-                };
-                input.click();
+                if (!isMobile) return toast('拍照功能仅限手机端使用。电脑端请勿打卡。');
+                $('#file-input-after').click();
+            };
+            $('#file-input-after').onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    afterPhotos.push(file);
+                    $('#camera-out-status').textContent = `${afterPhotos.length} after photo(s) captured`;
+                    const img = document.createElement('img');
+                    img.src = URL.createObjectURL(file);
+                    img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
+                    $('#after-preview').appendChild(img);
+                }
             };
 
             form.onsubmit = async e => {
@@ -361,7 +384,30 @@ function renderCheck(mode = 'checkin') {
 }
 
 function checkoutFormMarkup(r) {
-    return `<div class="status"><strong>${esc(r.location_name || r.site_name || 'Unnamed location')}</strong><div class="tiny muted">Checked in at ${fmt(r.check_in_device_at)}</div></div><form id="checkout"><div class="field"><label>Check-out Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Check Out Location *</label><input name="checkout_location" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-out">Get GPS Location</button><span class="muted tiny" id="gps-out-status">Not captured</span></div></div><div class="field"><label>Checkout Location Photo *</label><button class="btn alt" type="button" id="camera-out">Take Checkout Location Photo</button><div id="out-loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div></div><div class="field"><label>After Photo(s) *</label><div class="flex"><button class="btn alt" type="button" id="camera-out-more">Take After Photo(s)</button></div><span class="muted tiny" id="camera-out-status">No photos captured</span><div id="after-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div></div><div class="field"><label>After Note (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check Out</button></form>`;
+    return `<div class="status"><strong>${esc(r.location_name || r.site_name || 'Unnamed location')}</strong><div class="tiny muted">Checked in at ${fmt(r.check_in_device_at)}</div></div>
+    <form id="checkout">
+        <div class="field"><label>Check-out Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div>
+        <div class="field"><label>Check Out Location *</label><input name="checkout_location" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name"></div>
+        <div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-out">Get GPS Location</button><span class="muted tiny" id="gps-out-status">Not captured</span></div></div>
+        
+        <div class="field">
+            <label>Checkout Location Photo *</label>
+            <input type="file" id="file-input-out-loc" accept="image/*" capture="environment" style="display:none">
+            <button class="btn alt" type="button" id="camera-out">Take Checkout Location Photo</button>
+            <div id="out-loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div>
+        </div>
+        
+        <div class="field">
+            <label>After Photo(s) *</label>
+            <input type="file" id="file-input-after" accept="image/*" capture="environment" style="display:none">
+            <div class="flex"><button class="btn alt" type="button" id="camera-out-more">Take After Photo(s)</button></div>
+            <span class="muted tiny" id="camera-out-status">No photos captured</span>
+            <div id="after-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div>
+        </div>
+        
+        <div class="field"><label>After Note (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div>
+        <button class="btn good" type="submit">Submit Check Out</button>
+    </form>`;
 }
 
 function getGps(done) {

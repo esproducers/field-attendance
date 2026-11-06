@@ -294,7 +294,6 @@ async function handleRecordSync(req, res) {
     } finally { client.release(); }
 }
 
-// 🌟 修改：加入公司 Header 以及修正照片尺寸
 async function handleGeneratePdf(req, res) {
     try {
         const u = await getAuthUser(req);
@@ -309,7 +308,6 @@ async function handleGeneratePdf(req, res) {
         const record = r.rows[0];
         if (!record) return res.status(404).json({ error: 'Record not found' });
 
-        // 获取设置中的 Logo 和 App Name
         const settingsRes = await pool.query("SELECT key, value FROM system_settings WHERE key IN ('app_name', 'app_logo')");
         const settings = Object.fromEntries(settingsRes.rows.map(x => [x.key, x.value]));
         const appName = settings.app_name || 'Field Attendance';
@@ -325,11 +323,15 @@ async function handleGeneratePdf(req, res) {
         const page = pdfDoc.addPage([600, 800]);
         let y = 750;
 
-        // 🌟 绘制 Header：Logo + 公司名 + 地址
         if (logoBase64 && logoBase64.startsWith('data:image')) {
             try {
                 const logoBuffer = Buffer.from(logoBase64.split(',')[1], 'base64');
-                const logoImg = await pdfDoc.embedPng(logoBuffer);
+                let logoImg;
+                if (logoBase64.includes('image/png')) {
+                    logoImg = await pdfDoc.embedPng(logoBuffer);
+                } else {
+                    logoImg = await pdfDoc.embedJpg(logoBuffer);
+                }
                 const logoDims = logoImg.scaleToFit(80, 80);
                 page.drawImage(logoImg, { x: 50, y: y - 20, width: logoDims.width, height: logoDims.height });
             } catch (e) { console.error('Logo embed error', e); }
@@ -341,9 +343,8 @@ async function handleGeneratePdf(req, res) {
             page.drawText(record.site_address, { x: 150, y, size: 10, font });
             y -= 15;
         }
-        y -= 20; // 留出间隔
+        y -= 20;
 
-        // 绘制记录信息
         page.drawText('Attendance Record', { x: 50, y, size: 16, font: fontBold, color: rgb(0.1, 0.2, 0.5) });
         y -= 30;
         page.drawText(`Worker: ${record.full_name} (${record.email})`, { x: 50, y, size: 12, font });
@@ -377,14 +378,13 @@ async function handleGeneratePdf(req, res) {
             if (phasePhotos.length === 0) return;
 
             page.drawText(phaseLabel, { x: 50, y, size: 12, font: fontBold });
-            y -= 110; // 留出足够的高度放图片
+            y -= 110;
             let x = 50;
 
             for (const photo of phasePhotos) {
                 try {
                     const imgBuffer = await getPhotoBuffer(photo.file_path);
                     const image = await pdfDoc.embedJpg(imgBuffer);
-                    // 🌟 关键修复：限制图片大小在 140x90 内，防止覆盖文字
                     const imgDims = image.scaleToFit(140, 90);
                     page.drawImage(image, { x, y, width: imgDims.width, height: imgDims.height });
                     x += imgDims.width + 15;
