@@ -61,7 +61,7 @@ export default async function handler(req, res) {
 
         if (path === '/api/photos/orphan-bind' && method === 'POST') return handleOrphanBind(req, res);
 
-        // 🌟 Neon 对象存储相关路由
+        // Neon 对象存储相关路由
         if (path === '/api/get-upload-url' && method === 'GET') return handleGetUploadUrl(req, res);
         if (path === '/api/get-download-url' && method === 'POST') return handleGetDownloadUrl(req, res);
 
@@ -98,31 +98,50 @@ async function handleForgotPassword(req, res) {
 
     const r = await pool.query('SELECT id, full_name FROM users WHERE email=$1 AND active=true', [email.toLowerCase().trim()]);
     const user = r.rows[0];
+    // 即使用户不存在，也返回成功，防止恶意探测邮箱
     if (!user) return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
 
+    // 生成 Token
     const rawToken = randomBytes(32).toString('hex');
     const hashedToken = tokenHash(rawToken);
     await pool.query(`INSERT INTO password_reset_tokens(user_id, token_hash, expires_at) VALUES($1, $2, now() + interval '1 hour')`, [user.id, hashedToken]);
 
-    const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/?reset_token=${rawToken}`;
-    const resendKey = process.env.RESEND_API_KEY;
+    // 拼接重置链接 (如果 Vercel 没有配置 APP_URL，则默认使用你的域名)
+    const resetUrl = `${process.env.APP_URL || 'https://sigifood-mechandiser-tracking.vercel.app'}/?reset_token=${rawToken}`;
 
-    if (resendKey) {
-        try {
-            await fetch('https://api.resend.com/emails', {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    from: 'Field Attendance <onboarding@resend.dev>',
-                    to: [email],
-                    subject: 'Password Reset Request',
-                    html: `<p>Hello ${clean(user.full_name, 50)},</p><p>Click the link below to reset your password. This link is valid for 1 hour.</p><p><a href="${resetUrl}">Reset Password</a></p>`
-                })
-            });
-        } catch (err) { console.error('Failed to send email:', err); }
-    } else {
-        console.log('⚠️ No RESEND_API_KEY configured. Reset URL:', resetUrl);
+    // 🌟 调用 Google Apps Script 发送邮件
+    try {
+        const scriptUrl = process.env.APPS_SCRIPT_URL; // 从 Vercel 环境变量读取
+        if (!scriptUrl) throw new Error('APPS_SCRIPT_URL is not configured');
+
+        const response = await fetch(scriptUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            redirect: 'follow',
+            body: JSON.stringify({
+                to: email,
+                subject: 'Password Reset Request',
+                html: `<p>Hello ${clean(user.full_name, 50)},</p><p>Click the link below to reset your password. This link is valid for 1 hour.</p><p><a href="${resetUrl}">Reset Password</a></p><p>If you didn't request this, ignore this email.</p>`
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error('Apps Script HTTP Error:', response.status, errText);
+        } else {
+            const text = await response.text();
+            try {
+                const result = JSON.parse(text);
+                if (!result.ok) console.error('Apps Script Email Failed:', result.error);
+                else console.log('Email sent successfully via Apps Script');
+            } catch (parseErr) {
+                console.warn('Apps Script returned non-JSON response:', text);
+            }
+        }
+    } catch (err) {
+        console.error('Failed to fetch Apps Script:', err);
     }
+
     return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
 }
 
@@ -162,7 +181,8 @@ async function handleSignup(req, res) {
         const u = r.rows[0];
         const token = randomBytes(32).toString('hex');
         await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-        res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Strict; Secure`);
+        // 使用 SameSite=Lax 避免部分浏览器直接丢弃 Cookie
+        res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Lax`);
         return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
     } catch (e) {
         if (e.code === '23505') return res.status(409).json({ error: 'Email already registered' });
@@ -180,7 +200,8 @@ async function handleLogin(req, res) {
     }
     const token = randomBytes(32).toString('hex');
     await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-    res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Strict; Secure`);
+    // 使用 SameSite=Lax 避免部分浏览器直接丢弃 Cookie
+    res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Lax`);
     return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
 }
 
@@ -302,7 +323,7 @@ async function handleOrphanBind(req, res) {
     return res.status(200).json({ ok: true });
 }
 
-// 🌟 修改：使用 Neon 对象存储生成上传链接
+// 🌟 使用 Neon 对象存储生成上传链接
 async function handleGetUploadUrl(req, res) {
     try {
         await getAuthUser(req);
@@ -329,7 +350,7 @@ async function handleGetUploadUrl(req, res) {
     }
 }
 
-// 🌟 修改：使用 Neon 对象存储生成临时下载链接
+// 🌟 使用 Neon 对象存储生成临时下载链接
 async function handleGetDownloadUrl(req, res) {
     try {
         await getAuthUser(req);

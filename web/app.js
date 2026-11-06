@@ -291,7 +291,7 @@ async function compress(file) {
     return blob;
 }
 
-// 🌟 修改：上传后返回 fileKey
+// 上传后返回 fileKey
 async function uploadPhotoToB2(fileBlob) {
     if (!fileBlob) return null;
     if (!navigator.onLine) throw new Error('Offline mode detected during B2 upload activation');
@@ -309,7 +309,7 @@ async function saveAction(action, id, extra, gps, files) {
         await put('queue', task);
         for (const file of Array.from(files || [])) {
             const blob = await compress(file);
-            const buffer = await blob.arrayBuffer(); // 🌟 关键修改：转成 ArrayBuffer 存入
+            const buffer = await blob.arrayBuffer(); // 关键修改：转成 ArrayBuffer 存入
             await put('photos', {
                 id: uid(),
                 owner: user.id,
@@ -347,7 +347,7 @@ async function syncNow() {
                 for (const p of localPhotos) {
                     if (p.status === 'Synced') continue;
                     try {
-                        // 🌟 关键修改：从 ArrayBuffer 还原为 Blob
+                        // 关键修改：从 ArrayBuffer 还原为 Blob
                         const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
                         const cloudKey = await uploadPhotoToB2(blob);
                         if (cloudKey && !task.payload.photo_urls.includes(cloudKey)) task.payload.photo_urls.push(cloudKey);
@@ -537,6 +537,7 @@ function renderAuth(mode = 'login', token = '') {
         $('#resetform').onsubmit = async e => {
             e.preventDefault();
             try {
+                // 这里调用了你的 handleResetPassword 接口
                 await post('/api/reset-password', { token, new_password: e.target.password.value });
                 toast('Password updated successfully. Please sign in.');
                 window.history.replaceState({}, '', '/');
