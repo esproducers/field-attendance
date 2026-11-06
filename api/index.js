@@ -53,17 +53,22 @@ export default async function handler(req, res) {
         if (path === '/api/change-password' && method === 'POST') return handleChangePassword(req, res);
 
         if (path === '/api/settings' && method === 'GET') return handleSettings(req, res);
-        if (path === '/api/sites') return handleSites(req, res, method);
+
+        // 🌟 Clients (原 Sites) 路由
+        if (path === '/api/clients' && method === 'GET') return handleGetClients(req, res);
+        if (path === '/api/clients' && method === 'POST') return handleCreateClient(req, res);
+        const clientMatch = path.match(/^\/api\/clients\/([0-9a-f-]+)$/i);
+        if (clientMatch && method === 'PATCH') return handleUpdateClient(req, res, clientMatch[1]);
+        if (clientMatch && method === 'DELETE') return handleDeleteClient(req, res, clientMatch[1]);
+
         if (path === '/api/records' && method === 'GET') return handleRecords(req, res);
         if (path === '/api/records/sync' && method === 'POST') return handleRecordSync(req, res);
-
         if (path === '/api/records/download-pdf' && method === 'POST') return handleGeneratePdf(req, res);
 
         const photosMatch = path.match(/^\/api\/records\/([0-9a-f-]+)\/photos$/i);
         if (photosMatch && method === 'GET') return handleRecordPhotos(req, res, photosMatch[1]);
 
         if (path === '/api/photos/orphan-bind' && method === 'POST') return handleOrphanBind(req, res);
-
         if (path === '/api/get-upload-url' && method === 'GET') return handleGetUploadUrl(req, res);
         if (path === '/api/get-download-url' && method === 'POST') return handleGetDownloadUrl(req, res);
 
@@ -93,6 +98,65 @@ export default async function handler(req, res) {
 
 // ================= 4. 具体实现 =================
 
+// 🌟 Clients API
+async function handleGetClients(req, res) {
+    const u = await getAuthUser(req);
+    const isAdmin = u.role === 'admin';
+    let query = `SELECT s.*, usr.full_name AS created_by_name FROM sites s LEFT JOIN users usr ON s.user_id = usr.id`;
+    let params = [];
+    if (!isAdmin) {
+        query += ` WHERE s.user_id = $1`;
+        params.push(u.id);
+    }
+    query += ` ORDER BY s.name`;
+    const r = await pool.query(query, params);
+    return res.status(200).json({ clients: r.rows });
+}
+
+async function handleCreateClient(req, res) {
+    const u = await getAuthUser(req);
+    const body = await getBody(req);
+    const name = clean(body.name, 120);
+    if (!name) return res.status(400).json({ error: 'Client Name required' });
+    const r = await pool.query(
+        `INSERT INTO sites(name, address, brn, phone, user_id) VALUES($1,$2,$3,$4,$5) RETURNING *`,
+        [name, clean(body.address, 300), clean(body.brn, 100), clean(body.phone, 50), u.id]
+    );
+    return res.status(200).json({ client: r.rows[0] });
+}
+
+async function handleUpdateClient(req, res, clientId) {
+    const u = await getAuthUser(req);
+    const body = await getBody(req);
+
+    const check = await pool.query('SELECT user_id FROM sites WHERE id=$1', [clientId]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Client not found' });
+    if (u.role !== 'admin' && check.rows[0].user_id !== u.id) return res.status(403).json({ error: 'Unauthorized' });
+
+    const name = clean(body.name, 120);
+    if (!name) return res.status(400).json({ error: 'Client Name required' });
+
+    const r = await pool.query(
+        `UPDATE sites SET name=$1, address=$2, brn=$3, phone=$4 WHERE id=$5 RETURNING *`,
+        [name, clean(body.address, 300), clean(body.brn, 100), clean(body.phone, 50), clientId]
+    );
+    return res.status(200).json({ client: r.rows[0] });
+}
+
+async function handleDeleteClient(req, res, clientId) {
+    const u = await getAuthUser(req);
+
+    const check = await pool.query('SELECT user_id FROM sites WHERE id=$1', [clientId]);
+    if (!check.rows[0]) return res.status(404).json({ error: 'Client not found' });
+    if (u.role !== 'admin' && check.rows[0].user_id !== u.id) return res.status(403).json({ error: 'Unauthorized' });
+
+    await pool.query('UPDATE attendance_records SET site_id = NULL WHERE site_id = $1', [clientId]);
+    await pool.query('DELETE FROM sites WHERE id=$1', [clientId]);
+
+    return res.status(200).json({ ok: true });
+}
+
+// --- 其他原有功能保持完全不变 ---
 async function handleForgotPassword(req, res) {
     const body = await getBody(req);
     const { email } = body;
@@ -217,23 +281,6 @@ async function handleSettings(req, res) {
     return res.status(200).json({ appName: typeof v.app_name === 'string' ? v.app_name : 'Field Attendance', logo: typeof v.app_logo === 'string' ? v.app_logo : '' });
 }
 
-async function handleSites(req, res, method) {
-    if (method === 'GET') {
-        await getAuthUser(req);
-        const r = await pool.query('SELECT * FROM sites ORDER BY name');
-        return res.status(200).json({ sites: r.rows });
-    }
-    if (method === 'POST') {
-        await requireAdmin(req);
-        const body = await getBody(req);
-        const name = clean(body.name, 120);
-        if (!name) return res.status(400).json({ error: 'Site name required' });
-        const r = await pool.query('INSERT INTO sites(name,address,latitude,longitude) VALUES($1,$2,$3,$4) RETURNING *', [name, clean(body.address, 300), body.latitude || null, body.longitude || null]);
-        return res.status(200).json({ site: r.rows[0] });
-    }
-    return res.status(405).end();
-}
-
 async function handleRecords(req, res) {
     const u = await getAuthUser(req);
     const isAdmin = u.role === 'admin';
@@ -327,11 +374,8 @@ async function handleGeneratePdf(req, res) {
             try {
                 const logoBuffer = Buffer.from(logoBase64.split(',')[1], 'base64');
                 let logoImg;
-                if (logoBase64.includes('image/png')) {
-                    logoImg = await pdfDoc.embedPng(logoBuffer);
-                } else {
-                    logoImg = await pdfDoc.embedJpg(logoBuffer);
-                }
+                if (logoBase64.includes('image/png')) logoImg = await pdfDoc.embedPng(logoBuffer);
+                else logoImg = await pdfDoc.embedJpg(logoBuffer);
                 const logoDims = logoImg.scaleToFit(80, 80);
                 page.drawImage(logoImg, { x: 50, y: y - 20, width: logoDims.width, height: logoDims.height });
             } catch (e) { console.error('Logo embed error', e); }
@@ -339,10 +383,7 @@ async function handleGeneratePdf(req, res) {
 
         page.drawText(appName.toUpperCase(), { x: 150, y, size: 18, font: fontBold });
         y -= 20;
-        if (record.site_address) {
-            page.drawText(record.site_address, { x: 150, y, size: 10, font });
-            y -= 15;
-        }
+        if (record.site_address) { page.drawText(record.site_address, { x: 150, y, size: 10, font }); y -= 15; }
         y -= 20;
 
         page.drawText('Attendance Record', { x: 50, y, size: 16, font: fontBold, color: rgb(0.1, 0.2, 0.5) });
@@ -376,11 +417,8 @@ async function handleGeneratePdf(req, res) {
         const addPhotosToPage = async (phaseLabel, phaseKey) => {
             const phasePhotos = photos.filter(p => p.phase === phaseKey).slice(0, 2);
             if (phasePhotos.length === 0) return;
-
             page.drawText(phaseLabel, { x: 50, y, size: 12, font: fontBold });
-            y -= 110;
-            let x = 50;
-
+            y -= 110; let x = 50;
             for (const photo of phasePhotos) {
                 try {
                     const imgBuffer = await getPhotoBuffer(photo.file_path);
@@ -389,8 +427,7 @@ async function handleGeneratePdf(req, res) {
                     page.drawImage(image, { x, y, width: imgDims.width, height: imgDims.height });
                     x += imgDims.width + 15;
                 } catch (e) {
-                    page.drawText('[Image error]', { x, y, size: 10, font, color: rgb(1, 0, 0) });
-                    x += 100;
+                    page.drawText('[Image error]', { x, y, size: 10, font, color: rgb(1, 0, 0) }); x += 100;
                 }
             }
             y -= 20;
@@ -415,7 +452,6 @@ async function handleGeneratePdf(req, res) {
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="Attendance-${record.full_name}-${Date.now()}.pdf"`);
         return res.status(200).send(Buffer.from(pdfBytes));
-
     } catch (e) {
         console.error('PDF Gen Error:', e);
         return res.status(500).json({ error: 'Failed to generate PDF: ' + e.message });
@@ -441,18 +477,11 @@ async function handleGetUploadUrl(req, res) {
         const s3 = new S3Client({
             region: process.env.AWS_REGION || 'us-east-2',
             endpoint: process.env.AWS_ENDPOINT_URL_S3,
-            credentials: {
-                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-            },
+            credentials: { accessKeyId: process.env.AWS_ACCESS_KEY_ID, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY },
             forcePathStyle: true,
         });
         const fileKey = `photos/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
-        const command = new PutObjectCommand({
-            Bucket: process.env.AWS_BUCKET_NAME,
-            Key: fileKey,
-            ContentType: 'image/jpeg'
-        });
+        const command = new PutObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: fileKey, ContentType: 'image/jpeg' });
         const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
         return res.status(200).json({ uploadUrl, fileKey });
     } catch (e) {
@@ -471,17 +500,11 @@ async function handleGetDownloadUrl(req, res) {
         const s3 = new S3Client({
             region: process.env.AWS_REGION || 'us-east-2',
             endpoint: process.env.AWS_ENDPOINT_URL_S3,
-            credentials: {
-                accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-                secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-            },
+            credentials: { accessKeyId: process.env.AWS_ACCESS_KEY_ID, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY },
             forcePathStyle: true,
         });
 
-        const command = new GetObjectCommand({
-            Bucket: process.env.AWS_BUCKET_NAME,
-            Key: fileKey
-        });
+        const command = new GetObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: fileKey });
         const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
         return res.status(200).json({ downloadUrl: presignedUrl });
     } catch (e) {

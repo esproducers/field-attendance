@@ -2,7 +2,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmt = d => d ? new Date(d).toLocaleString() : '—';
 const uid = () => (self.crypto && crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
-let user = null, view = 'overview', records = [], users = [], sites = [], summary = {}, queue = [], syncing = false, selected = null, selectedCheckoutId = null, branding = { appName: 'Field Attendance', logo: '' };
+let user = null, view = 'overview', records = [], users = [], clients = [], summary = {}, queue = [], syncing = false, selected = null, selectedCheckoutId = null, branding = { appName: 'Field Attendance', logo: '' };
 const app = () => document.getElementById('app');
 
 function toast(m) { const t = $('#toast'); if (!t) return; t.textContent = m; t.style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = 'none', 4500) }
@@ -10,25 +10,13 @@ function toast(m) { const t = $('#toast'); if (!t) return; t.textContent = m; t.
 async function api(url, opts = {}) {
     let response;
     try {
-        response = await fetch(url, {
-            credentials: 'same-origin',
-            ...opts,
-            headers: {
-                ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}),
-                ...opts.headers
-            }
-        });
-    } catch {
-        throw new Error('Server unavailable. Your saved offline records remain on this device.');
-    }
+        response = await fetch(url, { credentials: 'same-origin', ...opts, headers: { ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...opts.headers } });
+    } catch { throw new Error('Server unavailable. Your saved offline records remain on this device.'); }
     const body = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null;
 
     if (response.status === 401) {
-        user = null;
-        localStorage.removeItem('fa_user');
-        if (view !== 'login' && view !== 'signup' && view !== 'forgot' && view !== 'reset') {
-            renderAuth();
-        }
+        user = null; localStorage.removeItem('fa_user');
+        if (view !== 'login' && view !== 'signup' && view !== 'forgot' && view !== 'reset') renderAuth();
     }
 
     if (!response.ok) throw new Error(body?.error || `Request failed (${response.status})`);
@@ -38,22 +26,14 @@ const post = (url, body, method = 'POST') => api(url, { method, body: JSON.strin
 
 const openDb = () => new Promise((resolve, reject) => {
     const r = indexedDB.open('field-attendance-local-v2', 1);
-    r.onupgradeneeded = () => {
-        const db = r.result;
-        if (!db.objectStoreNames.contains('queue')) db.createObjectStore('queue', { keyPath: 'key' });
-        if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' });
-    };
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error);
+    r.onupgradeneeded = () => { const db = r.result; if (!db.objectStoreNames.contains('queue')) db.createObjectStore('queue', { keyPath: 'key' }); if (!db.objectStoreNames.contains('photos')) db.createObjectStore('photos', { keyPath: 'id' }); };
+    r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
 });
 async function dbOp(store, mode, action) {
     const db = await openDb();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(store, mode);
-        const req = action(tx.objectStore(store));
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
-        tx.oncomplete = () => db.close();
+        const tx = db.transaction(store, mode); const req = action(tx.objectStore(store));
+        req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); tx.oncomplete = () => db.close();
     });
 }
 const put = (store, item) => dbOp(store, 'readwrite', s => s.put(item));
@@ -61,28 +41,20 @@ const get = (store, id) => dbOp(store, 'readonly', s => s.get(id));
 const all = store => dbOp(store, 'readonly', s => s.getAll());
 const del = (store, id) => dbOp(store, 'readwrite', s => s.delete(id));
 
-async function loadQueue() {
-    queue = (await all('queue')).filter(x => x.owner === user?.id).sort((a, b) => a.created - b.created);
-    return queue;
-}
+async function loadQueue() { queue = (await all('queue')).filter(x => x.owner === user?.id).sort((a, b) => a.created - b.created); return queue; }
 
-function brandMarkup() {
-    return `${branding.logo ? `<img class="brand-logo" src="${branding.logo}" alt="" />` : '<i>✓</i>'} <span>${esc(branding.appName || 'Field Attendance')}</span>`;
-}
+function brandMarkup() { return `${branding.logo ? `<img class="brand-logo" src="${branding.logo}" alt="" />` : '<i>✓</i>'} <span>${esc(branding.appName || 'Field Attendance')}</span>`; }
 function navItem(k, label) { return `<button class="nav ${view === k ? 'active' : ''}" data-view="${k}">${label}</button>` }
 
 function layout(body) {
-    app().innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand">${brandMarkup()}</div>${navItem('overview', '▦ Overview')}${navItem('records', '◷ Attendance Records')}${user.role === 'admin' ? navItem('users', '♙ User Management') + navItem('sites', '⌖ Sites') + navItem('audit', '☷ Audit Logs') + navItem('backup', '▣ Backup') : navItem('checkin', '⊕ Check In') + navItem('checkout', '⇥ Check Out') + navItem('sync', '⇅ Offline Sync')}${navItem('settings', '⚙ Settings')}<button class="nav" id="logout">↪ Sign Out</button></aside><main class="main"><div class="top"><div><h1>${({ overview: 'Dashboard', records: 'Attendance Records', users: 'User Management', sites: 'Sites', audit: 'Audit Logs', backup: 'Backup', check: 'Check In / Out', checkin: 'Check In', checkout: 'Check Out', sync: 'Offline Sync', settings: 'Settings' })[view]}</h1><div class="muted tiny">${esc(user.full_name)} · ${esc(user.role)} · <span class="${navigator.onLine ? '' : 'offline'}">${navigator.onLine ? 'Online' : 'Offline'}</span></div></div><button class="btn alt" id="refresh">↻ Refresh</button></div>${body}</main></div>`;
+    app().innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand">${brandMarkup()}</div>${navItem('overview', '▦ Overview')}${navItem('records', '◷ Attendance Records')}${user.role === 'admin' ? navItem('users', '♙ User Management') + navItem('clients', '🏢 Clients') + navItem('audit', '☷ Audit Logs') + navItem('backup', '▣ Backup') : navItem('checkin', '⊕ Check In') + navItem('checkout', '⇥ Check Out') + navItem('clients', '🏢 Clients') + navItem('sync', '⇅ Offline Sync')}${navItem('settings', '⚙ Settings')}<button class="nav" id="logout">↪ Sign Out</button></aside><main class="main"><div class="top"><div><h1>${({ overview: 'Dashboard', records: 'Attendance Records', users: 'User Management', clients: 'Client Management', audit: 'Audit Logs', backup: 'Backup', check: 'Check In / Out', checkin: 'Check In', checkout: 'Check Out', sync: 'Offline Sync', settings: 'Settings' })[view]}</h1><div class="muted tiny">${esc(user.full_name)} · ${esc(user.role)} · <span class="${navigator.onLine ? '' : 'offline'}">${navigator.onLine ? 'Online' : 'Offline'}</span></div></div><button class="btn alt" id="refresh">↻ Refresh</button></div>${body}</main></div>`;
     document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { view = b.dataset.view; render() });
     $('#logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }) } catch { } user = null; localStorage.removeItem('fa_user'); renderAuth() };
     $('#refresh').onclick = refresh;
 }
 
 function pill(v) { return `<span class="pill ${v === 'Synced' || v === 'completed' ? 'ok' : v === 'Failed' ? 'bad' : 'wait'}">${esc(v)}</span>` }
-
-function rowRecord(r) {
-    return `<tr><td>${user.role === 'admin' ? `<button class="btn alt" data-record="${esc(r.id)}">View</button>` : `<div class="row-actions"><button class="btn alt" data-record="${esc(r.id)}">View</button>${r.status === 'checked_in' ? `<button class="btn" data-checkout="${esc(r.id)}">Check Out</button>` : ''}</div>`}</td><td>${esc(r.full_name || user.full_name)}</td><td>${esc(r.location_name || r.site_name)}</td><td>${fmt(r.check_in_device_at)}</td><td>${esc(r.check_out_location_name || '—')}</td><td>${fmt(r.check_out_device_at)}</td><td>${pill(r.status)}</td><td>${r.photo_count ?? 0}</td></tr>`;
-}
+function rowRecord(r) { return `<tr><td>${user.role === 'admin' ? `<button class="btn alt" data-record="${esc(r.id)}">View</button>` : `<div class="row-actions"><button class="btn alt" data-record="${esc(r.id)}">View</button>${r.status === 'checked_in' ? `<button class="btn" data-checkout="${esc(r.id)}">Check Out</button>` : ''}</div>`}</td><td>${esc(r.full_name || user.full_name)}</td><td>${esc(r.location_name || r.site_name)}</td><td>${fmt(r.check_in_device_at)}</td><td>${esc(r.check_out_location_name || '—')}</td><td>${fmt(r.check_out_device_at)}</td><td>${pill(r.status)}</td><td>${r.photo_count ?? 0}</td></tr>`; }
 const recordTable = arr => `<div class="tablewrap"><table><thead><tr><th>Action</th><th>Worker</th><th>Site / Check-in Location</th><th>Check-in Time</th><th>Check-out Location</th><th>Check-out Time</th><th>Status</th><th>Photos</th></tr></thead><tbody>${arr.length ? arr.map(rowRecord).join('') : '<tr><td colspan="8" class="empty">No records yet</td></tr>'}</tbody></table></div>`;
 
 function bindRecords() {
@@ -109,9 +81,42 @@ function render() {
     } else if (view === 'users') {
         layout(`<section class="panel"><h2>Users (${users.length})</h2><div class="tablewrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th>Action</th></tr></thead><tbody>${users.map(u => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${pill(u.active ? 'Active' : 'Disabled')}</td><td><button class="btn alt" data-user="${u.id}">Edit</button></td></tr>`).join('')}</tbody></table></div></section>`);
         document.querySelectorAll('[data-user]').forEach(b => b.onclick = () => editUser(b.dataset.user));
-    } else if (view === 'sites') {
-        layout(`<section class="panel"><h2>Add Site</h2><form id="site-form"><div class="form-grid"><div class="field"><label>Site Name</label><input name="name" required maxlength="120"></div><div class="field"><label>Address</label><input name="address"></div><div class="field"><label>Latitude (optional)</label><input name="latitude" type="number" step="any"></div><div class="field"><label>Longitude (optional)</label><input name="longitude" type="number" step="any"></div></div><button class="btn">Save Site</button></form></section><section class="panel"><h2>Registered Sites</h2>${sites.map(s => `<div class="status"><strong>${esc(s.name)}</strong> — ${esc(s.address || 'No address')}</div>`).join('') || '<p class="muted">No sites configured</p>'}</section>`);
-        $('#site-form').onsubmit = async e => { e.preventDefault(); try { await post('/api/sites', Object.fromEntries(new FormData(e.target))); toast('Site created'); await refresh() } catch (err) { toast(err.message) } };
+    } else if (view === 'clients') {
+        const isAdmin = user.role === 'admin';
+        layout(`<section class="panel"><h2>Add Client</h2><form id="client-form"><div class="form-grid">
+            <div class="field"><label>Client Name *</label><input name="name" required maxlength="120"></div>
+            <div class="field"><label>Business Registration Number</label><input name="brn" maxlength="100"></div>
+            <div class="field"><label>Phone Number</label><input name="phone" maxlength="50"></div>
+            <div class="field"><label>Address</label><input name="address"></div>
+        </div><button class="btn">Save Client</button></form></section>
+        <section class="panel"><h2>Registered Clients (${clients.length})</h2>
+            <div class="tablewrap"><table><thead><tr>
+                <th>Client Name</th><th>BRN</th><th>Phone</th><th>Address</th>
+                ${isAdmin ? '<th>Added By</th>' : ''}
+                <th>Action</th>
+            </tr></thead><tbody>
+            ${clients.map(c => `<tr>
+                <td>${esc(c.name)}</td>
+                <td>${esc(c.brn || '—')}</td>
+                <td>${esc(c.phone || '—')}</td>
+                <td>${esc(c.address || '—')}</td>
+                ${isAdmin ? `<td>${esc(c.created_by_name || 'Unknown')}</td>` : ''}
+                <td><button class="btn alt" data-edit-client="${c.id}">Edit</button> <button class="btn danger" data-del-client="${c.id}">Delete</button></td>
+            </tr>`).join('') || `<tr><td colspan="${isAdmin ? 6 : 5}" class="empty">No clients yet</td></tr>`}
+            </tbody></table></div>
+        </section>`);
+
+        $('#client-form').onsubmit = async e => {
+            e.preventDefault();
+            try { await post('/api/clients', Object.fromEntries(new FormData(e.target))); toast('Client created'); await refresh(); } catch (err) { toast(err.message) }
+        };
+
+        document.querySelectorAll('[data-edit-client]').forEach(b => b.onclick = () => editClient(b.dataset.editClient));
+        document.querySelectorAll('[data-del-client]').forEach(b => b.onclick = async () => {
+            if (!window.confirm('Delete this client? Existing attendance records will remain but lose the client link.')) return;
+            try { await api('/api/clients/' + b.dataset.delClient, { method: 'DELETE' }); toast('Client deleted'); await refresh(); } catch (err) { toast(err.message) }
+        });
+
     } else if (view === 'audit') {
         layout('<section class="panel"><h2>Recent Administrative Activity</h2><div id="auditlog" class="muted">Loading...</div></section>');
         api('/api/admin/audit').then(d => {
@@ -130,96 +135,23 @@ function render() {
     }
 }
 
-async function showRecord(id) {
-    const r = records.find(x => x.id === id); if (!r) return;
-    let photos = [];
-    try {
-        photos = (await api(`/api/records/${id}/photos`)).photos;
-        for (let p of photos) {
-            if (p.url) {
-                try {
-                    const { downloadUrl } = await post('/api/get-download-url', { fileKey: p.url });
-                    p.displayUrl = downloadUrl;
-                } catch (e) { console.warn('URL fetch failed', e); p.displayUrl = ''; }
-            }
-        }
-    } catch (e) { toast(e.message) }
-
+function editClient(id) {
+    const c = clients.find(x => x.id === id); if (!c) return;
     const bg = document.createElement('div'); bg.className = 'modalbg';
-    bg.innerHTML = `<div class="modal">
-    <div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="closemodal">Close</button></div>
-    <p><strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email)})</p>
-    <p><strong>Site:</strong> ${esc(r.location_name || r.site_name)}</p>
-    
-    <h3>Check In Information</h3>
-    <p><strong>Check-in time:</strong> ${fmt(r.check_in_device_at)}</p>
-    <p><strong>Check-in location:</strong> ${esc(r.location_name || r.site_name || '—')}</p>
-    <p><strong>Check-in GPS:</strong> ${esc(r.check_in_lat ?? '—')}, ${esc(r.check_in_lng ?? '—')} ${r.check_in_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_in_lat + ',' + r.check_in_lng)}">Map</a>` : ''}</p>
-    <p><strong>Check-in notes:</strong> ${esc(r.check_in_notes || r.notes || '—')}</p>
-    
-    <h4>Location Photo</h4>
-    <div class="photo-row">${photos.filter(p => p.phase === 'location').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Location photo"></a>`).join('') || 'None'}</div>
-    <h4>Before Photo(s)</h4>
-    <div class="photo-row">${photos.filter(p => p.phase === 'before').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Before photo"></a>`).join('') || 'None'}</div>
-    
-    <h3>Check Out Information</h3>
-    <p><strong>Check-out time:</strong> ${fmt(r.check_out_device_at)}</p>
-    <p><strong>Check-out location:</strong> ${esc(r.check_out_location_name || r.location_name || '—')}</p>
-    <p><strong>Check-out GPS:</strong> ${esc(r.check_out_lat ?? '—')}, ${esc(r.check_out_lng ?? '—')} ${r.check_out_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_out_lat + ',' + r.check_out_lng)}">Map</a>` : ''}</p>
-    <p><strong>Check-out notes:</strong> ${esc(r.check_out_notes || '—')}</p>
-    
-    <h4>Checkout Location Photo</h4>
-    <div class="photo-row">${photos.filter(p => p.phase === 'checkout_location').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Checkout location photo"></a>`).join('') || 'None'}</div>
-    <h4>After Photo(s)</h4>
-    <div class="photo-row">${photos.filter(p => p.phase === 'after').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="After photo"></a>`).join('') || 'None'}</div>
-    
-    <div style="margin-top: 20px; text-align: right;">
-        <button class="btn" id="downloadPDF">Download PDF</button>
-    </div>
-    </div>`;
-    document.body.append(bg);
-    bg.querySelector('#closemodal').onclick = () => bg.remove();
-    bg.onclick = e => { if (e.target === bg) bg.remove() };
-
-    bg.querySelector('#downloadPDF').onclick = async () => {
-        try {
-            toast('Generating PDF...');
-            const response = await fetch('/api/records/download-pdf', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ recordId: id })
-            });
-
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.error || 'Failed to generate PDF');
-            }
-
-            const blob = await response.blob();
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = `Attendance-${r.full_name}-${Date.now()}.pdf`;
-            document.body.append(a); a.click(); a.remove();
-            setTimeout(() => URL.revokeObjectURL(a.href), 30000);
-            toast('PDF downloaded successfully.');
-        } catch (err) {
-            toast('Error: ' + err.message);
-        }
-    };
-}
-
-function editUser(id) {
-    const u = users.find(x => x.id === id); if (!u) return;
-    const bg = document.createElement('div'); bg.className = 'modalbg';
-    bg.innerHTML = `<div class="modal"><h2>Edit User</h2><form id="edit-user"><div class="field"><label>Name</label><input name="full_name" value="${esc(u.full_name)}" required></div><div class="field"><label>Role</label><select name="role"><option value="user" ${u.role === 'user' ? 'selected' : ''}>User</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option></select></div><div class="field"><label>Account</label><select name="active"><option value="true" ${u.active ? 'selected' : ''}>Active</option><option value="false" ${!u.active ? 'selected' : ''}>Disabled</option></select></div><div class="actions"><button class="btn">Save Changes</button><button type="button" class="btn alt" id="cancel">Cancel</button></div></form></div>`;
+    bg.innerHTML = `<div class="modal"><h2>Edit Client</h2><form id="edit-client-form">
+        <div class="field"><label>Client Name *</label><input name="name" value="${esc(c.name)}" required maxlength="120"></div>
+        <div class="field"><label>BRN</label><input name="brn" value="${esc(c.brn || '')}" maxlength="100"></div>
+        <div class="field"><label>Phone</label><input name="phone" value="${esc(c.phone || '')}" maxlength="50"></div>
+        <div class="field"><label>Address</label><input name="address" value="${esc(c.address || '')}"></div>
+        <div class="actions"><button class="btn">Save Changes</button><button type="button" class="btn alt" id="cancel">Cancel</button></div>
+    </form></div>`;
     document.body.append(bg);
     bg.querySelector('#cancel').onclick = () => bg.remove();
     bg.querySelector('form').onsubmit = async e => {
         e.preventDefault();
-        const d = Object.fromEntries(new FormData(e.target));
         try {
-            await post('/api/admin/users/' + id, { ...d, active: d.active === 'true' }, 'PATCH');
-            bg.remove(); toast('User updated'); await refresh();
+            await post('/api/clients/' + id, Object.fromEntries(new FormData(e.target)), 'PATCH');
+            bg.remove(); toast('Client updated'); await refresh();
         } catch (err) { toast(err.message) }
     };
 }
@@ -239,34 +171,25 @@ function renderCheck(mode = 'checkin') {
     }
     const list = [...byId.values()];
     const active = list.filter(x => x.status === 'checked_in');
+    const clientOptions = clients.map(c => `<option value="${esc(c.name)}">`).join('');
 
     if (mode === 'checkin') {
         const canCheckIn = active.length === 0;
         layout(`<section class="panel"><div class="flex between"><h2>Check In Form</h2>${canCheckIn ? '<span class="pill ok">Ready to check in</span>' : '<span class="pill wait">Checkout required first</span>'}</div>${canCheckIn ? `
         <form id="checkin">
             <div class="field"><label>Check-in Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div>
-            <div class="field"><label>Location *</label><input name="location_name" id="input-loc-name" required maxlength="200" placeholder="Enter location"></div>
+            <div class="field">
+                <label>Client Name / Location *</label>
+                <input name="location_name" id="input-loc-name" list="clients-list" required maxlength="200" placeholder="Select or type client name">
+                <datalist id="clients-list">${clientOptions}</datalist>
+            </div>
             <div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-in">Get GPS Location</button><span class="muted tiny" id="gps-in-status">Not captured</span></div></div>
-            
-            <div class="field">
-                <label>Location Photo *</label>
-                <button class="btn alt" type="button" id="camera-in">Take Location Photo</button>
-                <span class="muted tiny" id="camera-in-status"></span>
-                <div id="loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div>
-            </div>
-            
-            <div class="field">
-                <label>Before Photo(s) *</label>
-                <button class="btn alt" type="button" id="camera-in-more">Add Before Photo(s)</button>
-                <span class="muted tiny" id="camera-in-more-status">Photos are saved together</span>
-                <div id="before-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div>
-            </div>
-            
+            <div class="field"><label>Location Photo *</label><button class="btn alt" type="button" id="camera-in">Take Location Photo</button><span class="muted tiny" id="camera-in-status"></span><div id="loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div></div>
+            <div class="field"><label>Before Photo(s) *</label><button class="btn alt" type="button" id="camera-in-more">Add Before Photo(s)</button><span class="muted tiny" id="camera-in-more-status">Photos are saved together</span><div id="before-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div></div>
             <div class="field"><label>Condition Notes (optional)</label><textarea name="notes" id="input-notes" rows="2" placeholder=""></textarea></div>
             <button class="btn good" type="submit">Submit Check In</button>
         </form>` : `<p class="notice">You are currently checked in. Please complete Check Out before checking in at another point.</p><button class="btn" id="go-checkout">Go to Check Out Form</button>`}</section>`);
 
-        // 🌟 草稿自动保存机制：防止拍照或后台切换导致数据丢失
         const draftKey = `draft_checkin_${user.id}`;
         let gpsIn = null, locationPhoto = null, beforePhotos = [];
 
@@ -274,33 +197,17 @@ function renderCheck(mode = 'checkin') {
         const savedDraft = JSON.parse(sessionStorage.getItem(draftKey) || '{}');
         if (savedDraft.location_name) $('#input-loc-name').value = savedDraft.location_name;
         if (savedDraft.notes) $('#input-notes').value = savedDraft.notes;
-        if (savedDraft.gpsIn) {
-            gpsIn = savedDraft.gpsIn;
-            $('#gps-in-status').textContent = `${gpsIn.latitude.toFixed(5)}, ${gpsIn.longitude.toFixed(5)} ±${Math.round(gpsIn.accuracy)}m`;
-        }
+        if (savedDraft.gpsIn) { gpsIn = savedDraft.gpsIn; $('#gps-in-status').textContent = `${gpsIn.latitude.toFixed(5)}, ${gpsIn.longitude.toFixed(5)} ±${Math.round(gpsIn.accuracy)}m`; }
 
-        // 监听输入变化，实时保存
-        $('#input-loc-name')?.addEventListener('input', (e) => {
-            savedDraft.location_name = e.target.value;
-            sessionStorage.setItem(draftKey, JSON.stringify(savedDraft));
-        });
-        $('#input-notes')?.addEventListener('input', (e) => {
-            savedDraft.notes = e.target.value;
-            sessionStorage.setItem(draftKey, JSON.stringify(savedDraft));
-        });
+        $('#input-loc-name')?.addEventListener('input', (e) => { savedDraft.location_name = e.target.value; sessionStorage.setItem(draftKey, JSON.stringify(savedDraft)); });
+        $('#input-notes')?.addEventListener('input', (e) => { savedDraft.notes = e.target.value; sessionStorage.setItem(draftKey, JSON.stringify(savedDraft)); });
 
         const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
-        $('#gps-in')?.addEventListener('click', () => getGps(g => {
-            gpsIn = g;
-            $('#gps-in-status').textContent = gpsText(g);
-            savedDraft.gpsIn = g;
-            sessionStorage.setItem(draftKey, JSON.stringify(savedDraft));
-        }));
+        $('#gps-in')?.addEventListener('click', () => getGps(g => { gpsIn = g; $('#gps-in-status').textContent = gpsText(g); savedDraft.gpsIn = g; sessionStorage.setItem(draftKey, JSON.stringify(savedDraft)); }));
 
         $('#camera-in')?.addEventListener('click', () => openCamera(files => {
             locationPhoto = files[0];
             $('#camera-in-status').textContent = `1 location photo captured`;
-            // 直接更新 DOM 显示图片，绝不重新渲染页面
             $('#loc-preview').innerHTML = `<img src="${URL.createObjectURL(locationPhoto)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
         }));
 
@@ -309,8 +216,7 @@ function renderCheck(mode = 'checkin') {
             $('#camera-in-more-status').textContent = `${beforePhotos.length} before photo(s) captured`;
             files.forEach(file => {
                 const img = document.createElement('img');
-                img.src = URL.createObjectURL(file);
-                img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
+                img.src = URL.createObjectURL(file); img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
                 $('#before-preview').appendChild(img);
             });
         }));
@@ -323,17 +229,13 @@ function renderCheck(mode = 'checkin') {
             if (!locationPhoto) return toast('Please take a Location Photo.');
             if (!beforePhotos.length) return toast('Please take at least one Before Photo.');
 
-            const allPhotos = [
-                { file: locationPhoto, phase: 'location' },
-                ...beforePhotos.map(file => ({ file, phase: 'before' }))
-            ];
-            // 提交前清除草稿
+            const allPhotos = [{ file: locationPhoto, phase: 'location' }, ...beforePhotos.map(file => ({ file, phase: 'before' }))];
             sessionStorage.removeItem(draftKey);
             await saveAction('check_in', uid(), { location_name: f.location_name.value.trim(), notes: f.notes.value }, gpsIn, allPhotos);
         });
     } else {
         let chosen = active.find(x => x.id === selectedCheckoutId) || null;
-        layout(`<section class="panel"><div class="flex between"><h2>Check Out Form</h2><span class="pill ${active.length ? 'wait' : 'ok'}">${active.length ? 'Check-in active' : 'No active check-in'}</span></div>${active.length ? `<div class="field"><label>Check Out Location *</label><select id="checkout-record"><option value="">Select the location to check out</option>${active.map(x => `<option value="${esc(x.id)}" ${chosen?.id === x.id ? 'selected' : ''}>${esc(x.location_name || x.site_name || 'Unnamed location')} — ${fmt(x.check_in_device_at)}</option>`).join('')}</select></div><div id="checkout-form-area">${chosen ? checkoutFormMarkup(chosen) : '<p class="notice">Select an active check-in above to open its Check Out form.</p>'}</div>` : '<p class="notice">There are no active check-ins to check out.</p><button class="btn" id="go-checkin">Go to Check In Form</button>'}</section>`);
+        layout(`<section class="panel"><div class="flex between"><h2>Check Out Form</h2><span class="pill ${active.length ? 'wait' : 'ok'}">${active.length ? 'Check-in active' : 'No active check-in'}</span></div>${active.length ? `<div class="field"><label>Check Out Location *</label><select id="checkout-record"><option value="">Select the location to check out</option>${active.map(x => `<option value="${esc(x.id)}" ${chosen?.id === x.id ? 'selected' : ''}>${esc(x.location_name || x.site_name || 'Unnamed location')} — ${fmt(x.check_in_device_at)}</option>`).join('')}</select></div><div id="checkout-form-area">${chosen ? checkoutFormMarkup(chosen, clientOptions) : '<p class="notice">Select an active check-in above to open its Check Out form.</p>'}</div>` : '<p class="notice">There are no active check-ins to check out.</p><button class="btn" id="go-checkin">Go to Check In Form</button>'}</section>`);
 
         const bindOutForm = (r) => {
             const form = $('#checkout'); if (!form) return;
@@ -344,42 +246,24 @@ function renderCheck(mode = 'checkin') {
             const savedDraft = JSON.parse(sessionStorage.getItem(draftKey) || '{}');
             if (savedDraft.location_name) $('#input-out-loc-name').value = savedDraft.location_name;
             if (savedDraft.notes) $('#input-out-notes').value = savedDraft.notes;
-            if (savedDraft.gpsOut) {
-                gpsOut = savedDraft.gpsOut;
-                $('#gps-out-status').textContent = `${gpsOut.latitude.toFixed(5)}, ${gpsOut.longitude.toFixed(5)} ±${Math.round(gpsOut.accuracy)}m`;
-            }
+            if (savedDraft.gpsOut) { gpsOut = savedDraft.gpsOut; $('#gps-out-status').textContent = `${gpsOut.latitude.toFixed(5)}, ${gpsOut.longitude.toFixed(5)} ±${Math.round(gpsOut.accuracy)}m`; }
 
-            // 监听输入变化
-            $('#input-out-loc-name')?.addEventListener('input', (e) => {
-                savedDraft.location_name = e.target.value;
-                sessionStorage.setItem(draftKey, JSON.stringify(savedDraft));
-            });
-            $('#input-out-notes')?.addEventListener('input', (e) => {
-                savedDraft.notes = e.target.value;
-                sessionStorage.setItem(draftKey, JSON.stringify(savedDraft));
-            });
+            $('#input-out-loc-name')?.addEventListener('input', (e) => { savedDraft.location_name = e.target.value; sessionStorage.setItem(draftKey, JSON.stringify(savedDraft)); });
+            $('#input-out-notes')?.addEventListener('input', (e) => { savedDraft.notes = e.target.value; sessionStorage.setItem(draftKey, JSON.stringify(savedDraft)); });
 
             const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
-            $('#gps-out').onclick = () => getGps(g => {
-                gpsOut = g;
-                $('#gps-out-status').textContent = gpsText(g);
-                savedDraft.gpsOut = g;
-                sessionStorage.setItem(draftKey, JSON.stringify(savedDraft));
-            });
+            $('#gps-out').onclick = () => getGps(g => { gpsOut = g; $('#gps-out-status').textContent = gpsText(g); savedDraft.gpsOut = g; sessionStorage.setItem(draftKey, JSON.stringify(savedDraft)); });
 
             $('#camera-out').onclick = () => openCamera(files => {
-                checkoutLocPhoto = files[0];
-                $('#camera-out-status').textContent = `1 checkout location photo captured`;
+                checkoutLocPhoto = files[0]; $('#camera-out-status').textContent = `1 checkout location photo captured`;
                 $('#out-loc-preview').innerHTML = `<img src="${URL.createObjectURL(checkoutLocPhoto)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
             });
 
             $('#camera-out-more').onclick = () => openCamera(files => {
-                afterPhotos = afterPhotos.concat(files);
-                $('#camera-out-status').textContent = `${afterPhotos.length} after photo(s) captured`;
+                afterPhotos = afterPhotos.concat(files); $('#camera-out-status').textContent = `${afterPhotos.length} after photo(s) captured`;
                 files.forEach(file => {
                     const img = document.createElement('img');
-                    img.src = URL.createObjectURL(file);
-                    img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
+                    img.src = URL.createObjectURL(file); img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
                     $('#after-preview').appendChild(img);
                 });
             });
@@ -391,17 +275,14 @@ function renderCheck(mode = 'checkin') {
                 if (!checkoutLocPhoto) return toast('Please take a Checkout Location Photo.');
                 if (!afterPhotos.length) return toast('Please take at least one After Photo.');
 
-                const allPhotos = [
-                    { file: checkoutLocPhoto, phase: 'checkout_location' },
-                    ...afterPhotos.map(file => ({ file, phase: 'after' }))
-                ];
+                const allPhotos = [{ file: checkoutLocPhoto, phase: 'checkout_location' }, ...afterPhotos.map(file => ({ file, phase: 'after' }))];
                 sessionStorage.removeItem(draftKey);
                 await saveAction('check_out', r.id, { location_name: f.checkout_location.value.trim(), notes: f.notes.value }, gpsOut, allPhotos);
             };
         };
         $('#checkout-record')?.addEventListener('change', e => {
             const r = active.find(x => x.id === e.target.value);
-            $('#checkout-form-area').innerHTML = r ? checkoutFormMarkup(r) : '<p class="notice">Select an active check-in above to open its Check Out form.</p>';
+            $('#checkout-form-area').innerHTML = r ? checkoutFormMarkup(r, clientOptions) : '<p class="notice">Select an active check-in above to open its Check Out form.</p>';
             if (r) bindOutForm(r);
         });
         if (chosen) bindOutForm(chosen);
@@ -409,26 +290,18 @@ function renderCheck(mode = 'checkin') {
     }
 }
 
-function checkoutFormMarkup(r) {
+function checkoutFormMarkup(r, clientOptions) {
     return `<div class="status"><strong>${esc(r.location_name || r.site_name || 'Unnamed location')}</strong><div class="tiny muted">Checked in at ${fmt(r.check_in_device_at)}</div></div>
     <form id="checkout">
         <div class="field"><label>Check-out Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div>
-        <div class="field"><label>Check Out Location *</label><input name="checkout_location" id="input-out-loc-name" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name"></div>
+        <div class="field">
+            <label>Client Name / Location *</label>
+            <input name="checkout_location" id="input-out-loc-name" list="clients-list-out" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name">
+            <datalist id="clients-list-out">${clientOptions}</datalist>
+        </div>
         <div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-out">Get GPS Location</button><span class="muted tiny" id="gps-out-status">Not captured</span></div></div>
-        
-        <div class="field">
-            <label>Checkout Location Photo *</label>
-            <button class="btn alt" type="button" id="camera-out">Take Checkout Location Photo</button>
-            <div id="out-loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div>
-        </div>
-        
-        <div class="field">
-            <label>After Photo(s) *</label>
-            <div class="flex"><button class="btn alt" type="button" id="camera-out-more">Take After Photo(s)</button></div>
-            <span class="muted tiny" id="camera-out-status">No photos captured</span>
-            <div id="after-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div>
-        </div>
-        
+        <div class="field"><label>Checkout Location Photo *</label><button class="btn alt" type="button" id="camera-out">Take Checkout Location Photo</button><div id="out-loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div></div>
+        <div class="field"><label>After Photo(s) *</label><div class="flex"><button class="btn alt" type="button" id="camera-out-more">Take After Photo(s)</button></div><span class="muted tiny" id="camera-out-status">No photos captured</span><div id="after-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div></div>
         <div class="field"><label>After Note (optional)</label><textarea name="notes" id="input-out-notes" rows="2" placeholder=""></textarea></div>
         <button class="btn good" type="submit">Submit Check Out</button>
     </form>`;
@@ -441,32 +314,21 @@ async function openCamera(onDone) {
     bg.innerHTML = `<div class="modal"><div class="flex between"><h2>Take Photo</h2><button class="btn alt" id="camera-close">Cancel</button></div><video id="camera-video" autoplay playsinline style="width:100%;max-height:55vh;background:#111;border-radius:12px"></video><canvas id="camera-canvas" style="display:none"></canvas><p class="muted" id="camera-count">0 photos captured</p><div class="flex"><button class="btn" id="camera-shot">Capture Photo</button><button class="btn good" id="camera-done">Use Photos</button></div></div>`;
     document.body.append(bg);
     const close = () => { try { stream?.getTracks().forEach(t => t.stop()) } catch { } bg.remove() };
-    bg.querySelector('#camera-close').onclick = close;
-    bg.onclick = e => { if (e.target === bg) close() };
+    bg.querySelector('#camera-close').onclick = close; bg.onclick = e => { if (e.target === bg) close() };
     try {
-        // 电脑端和手机端都会调用摄像头，电脑端如果不支持会自动降级提示
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
         bg.querySelector('#camera-video').srcObject = stream;
-    } catch (e) {
-        close(); toast('Cannot open camera. Please allow camera permission and use HTTPS.'); return;
-    }
+    } catch (e) { close(); toast('Cannot open camera. Please allow camera permission and use HTTPS.'); return; }
     bg.querySelector('#camera-shot').onclick = async () => {
         const v = bg.querySelector('#camera-video'), c = bg.querySelector('#camera-canvas');
         if (!v.videoWidth) return toast('Camera is not ready yet.');
         const scale = Math.min(1, 1600 / Math.max(v.videoWidth, v.videoHeight));
-        c.width = Math.round(v.videoWidth * scale);
-        c.height = Math.round(v.videoHeight * scale);
+        c.width = Math.round(v.videoWidth * scale); c.height = Math.round(v.videoHeight * scale);
         c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
         const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', .85));
-        if (blob) {
-            files.push(new File([blob], `camera-${Date.now()}-${files.length + 1}.jpg`, { type: 'image/jpeg' }));
-            bg.querySelector('#camera-count').textContent = `${files.length} photo(s) captured`;
-        }
+        if (blob) { files.push(new File([blob], `camera-${Date.now()}-${files.length + 1}.jpg`, { type: 'image/jpeg' })); bg.querySelector('#camera-count').textContent = `${files.length} photo(s) captured`; }
     };
-    bg.querySelector('#camera-done').onclick = () => {
-        if (!files.length) { toast('Please capture at least one photo.'); return; }
-        close(); onDone(files);
-    };
+    bg.querySelector('#camera-done').onclick = () => { if (!files.length) { toast('Please capture at least one photo.'); return; } close(); onDone(files); };
 }
 
 function getGps(done) {
@@ -483,10 +345,8 @@ async function compress(file) {
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(bitmap.width * scale);
-    canvas.height = Math.round(bitmap.height * scale);
-    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    bitmap.close();
+    canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height); bitmap.close();
     let blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', .72));
     if (blob.size > 550000) blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', .48));
     return blob;
@@ -508,30 +368,13 @@ async function saveAction(action, id, extra, gps, files) {
         const task = { key, owner: user.id, type: 'record', payload, status: 'Pending', created: Date.now(), tries: 0 };
         await put('queue', task);
         for (const item of Array.from(files || [])) {
-            const file = item.file || item;
-            const phase = item.phase || (action === 'check_in' ? 'before' : 'after');
-
-            const blob = await compress(file);
-            const buffer = await blob.arrayBuffer();
-            await put('photos', {
-                id: uid(),
-                owner: user.id,
-                recordId: id,
-                phase: phase,
-                buffer: buffer,
-                type: 'image/jpeg',
-                status: 'Pending',
-                created: Date.now()
-            });
+            const file = item.file || item; const phase = item.phase || (action === 'check_in' ? 'before' : 'after');
+            const blob = await compress(file); const buffer = await blob.arrayBuffer();
+            await put('photos', { id: uid(), owner: user.id, recordId: id, phase: phase, buffer: buffer, type: 'image/jpeg', status: 'Pending', created: Date.now() });
         }
         toast('Saved locally. Synchronization queued.');
-        await loadQueue();
-        view = 'sync';
-        render();
-        syncNow();
-    } catch (e) {
-        toast('Save failed: ' + e.message);
-    }
+        await loadQueue(); view = 'sync'; render(); syncNow();
+    } catch (e) { toast('Save failed: ' + e.message); }
 }
 
 async function syncNow() {
@@ -541,34 +384,23 @@ async function syncNow() {
         const tasks = (await all('queue')).filter(x => x.owner === user.id).sort((a, b) => a.created - b.created);
         for (const task of tasks) {
             try {
-                const localPhotos = (await all('photos')).filter(p =>
-                    p.owner === user.id &&
-                    p.recordId === task.payload.id
-                );
+                const localPhotos = (await all('photos')).filter(p => p.owner === user.id && p.recordId === task.payload.id);
                 task.payload.photo_urls = task.payload.photo_urls || [];
                 for (const p of localPhotos) {
                     if (p.status === 'Synced') continue;
                     try {
                         const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
                         const cloudKey = await uploadPhotoToB2(blob);
-                        if (cloudKey) {
-                            task.payload.photo_urls.push({ key: cloudKey, phase: p.phase });
-                        }
+                        if (cloudKey) task.payload.photo_urls.push({ key: cloudKey, phase: p.phase });
                         await del('photos', p.id);
                     } catch (photoErr) {
-                        p.status = 'Failed';
-                        p.error = photoErr.message;
-                        await put('photos', p);
-                        throw photoErr;
+                        p.status = 'Failed'; p.error = photoErr.message; await put('photos', p); throw photoErr;
                     }
                 }
                 await post('/api/records/sync', task.payload);
                 await del('queue', task.key);
             } catch (e) {
-                task.status = 'Failed';
-                task.error = e.message;
-                task.tries++;
-                await put('queue', task);
+                task.status = 'Failed'; task.error = e.message; task.tries++; await put('queue', task);
                 if (/Server unavailable|Please sign in|Session expired/.test(e.message)) break;
             }
         }
@@ -577,22 +409,13 @@ async function syncNow() {
             try {
                 const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
                 const cloudKey = await uploadPhotoToB2(blob);
-                if (cloudKey) {
-                    try { await post('/api/photos/orphan-bind', { photoId: p.id, recordId: p.recordId, url: cloudKey }) } catch { }
-                    await del('photos', p.id);
-                }
-            } catch (e) {
-                p.status = 'Failed';
-                p.error = e.message;
-                await put('photos', p);
-            }
+                if (cloudKey) { try { await post('/api/photos/orphan-bind', { photoId: p.id, recordId: p.recordId, url: cloudKey }) } catch { } await del('photos', p.id); }
+            } catch (e) { p.status = 'Failed'; p.error = e.message; await put('photos', p); }
         }
         await loadQueue();
         if (navigator.onLine) { try { await loadServerData() } catch { } }
         if (['sync', 'overview', 'records', 'checkin', 'checkout'].includes(view)) render();
-    } finally {
-        syncing = false;
-    }
+    } finally { syncing = false; }
 }
 
 async function renderSync() {
@@ -771,11 +594,11 @@ function renderAuth(mode = 'login', token = '') {
 
 async function loadServerData() {
     try {
-        const results = await Promise.all([api('/api/records'), api('/api/sites')]);
+        const results = await Promise.all([api('/api/records'), api('/api/clients')]);
         records = results[0].records;
-        sites = results[1].sites;
+        clients = results[1].clients;
     } catch (e) {
-        console.warn('Failed to load records/sites', e);
+        console.warn('Failed to load records/clients', e);
     }
 
     if (user.role === 'admin') {
