@@ -2,7 +2,7 @@ import pg from 'pg';
 import { scryptSync, timingSafeEqual, randomBytes, createHash, randomUUID } from 'node:crypto';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'; // 🌟 新增 PDF 生成依赖
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 
 // ================= 1. 基础配置与数据库 =================
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || process.env.STORAGE_URL, max: 10 });
@@ -57,7 +57,6 @@ export default async function handler(req, res) {
         if (path === '/api/records' && method === 'GET') return handleRecords(req, res);
         if (path === '/api/records/sync' && method === 'POST') return handleRecordSync(req, res);
 
-        // 🌟 新增：PDF 生成路由
         if (path === '/api/records/download-pdf' && method === 'POST') return handleGeneratePdf(req, res);
 
         const photosMatch = path.match(/^\/api\/records\/([0-9a-f-]+)\/photos$/i);
@@ -65,7 +64,6 @@ export default async function handler(req, res) {
 
         if (path === '/api/photos/orphan-bind' && method === 'POST') return handleOrphanBind(req, res);
 
-        // Neon 对象存储相关路由
         if (path === '/api/get-upload-url' && method === 'GET') return handleGetUploadUrl(req, res);
         if (path === '/api/get-download-url' && method === 'POST') return handleGetDownloadUrl(req, res);
 
@@ -296,16 +294,26 @@ async function handleRecordSync(req, res) {
     } finally { client.release(); }
 }
 
-// 🌟 新增：PDF 生成路由
+// 🌟 修改：加入公司 Header 以及修正照片尺寸
 async function handleGeneratePdf(req, res) {
     try {
         const u = await getAuthUser(req);
         const body = await getBody(req);
         const { recordId } = body;
 
-        const r = await pool.query(`SELECT a.*, u.full_name, u.email FROM attendance_records a JOIN users u ON a.user_id=u.id WHERE a.id=$1 AND (a.user_id=$2 OR $3='admin')`, [recordId, u.id, u.role]);
+        const r = await pool.query(`SELECT a.*, u.full_name, u.email, s.name AS site_name, s.address AS site_address 
+                                    FROM attendance_records a 
+                                    JOIN users u ON a.user_id=u.id 
+                                    LEFT JOIN sites s ON a.site_id=s.id
+                                    WHERE a.id=$1 AND (a.user_id=$2 OR $3='admin')`, [recordId, u.id, u.role]);
         const record = r.rows[0];
         if (!record) return res.status(404).json({ error: 'Record not found' });
+
+        // 获取设置中的 Logo 和 App Name
+        const settingsRes = await pool.query("SELECT key, value FROM system_settings WHERE key IN ('app_name', 'app_logo')");
+        const settings = Object.fromEntries(settingsRes.rows.map(x => [x.key, x.value]));
+        const appName = settings.app_name || 'Field Attendance';
+        const logoBase64 = settings.app_logo || '';
 
         const p = await pool.query(`SELECT phase, file_path FROM photos WHERE attendance_id=$1`, [recordId]);
         const photos = p.rows;
@@ -317,19 +325,38 @@ async function handleGeneratePdf(req, res) {
         const page = pdfDoc.addPage([600, 800]);
         let y = 750;
 
-        page.drawText('Attendance Record', { x: 50, y, size: 24, font: fontBold, color: rgb(0.1, 0.2, 0.5) });
-        y -= 40;
+        // 🌟 绘制 Header：Logo + 公司名 + 地址
+        if (logoBase64 && logoBase64.startsWith('data:image')) {
+            try {
+                const logoBuffer = Buffer.from(logoBase64.split(',')[1], 'base64');
+                const logoImg = await pdfDoc.embedPng(logoBuffer);
+                const logoDims = logoImg.scaleToFit(80, 80);
+                page.drawImage(logoImg, { x: 50, y: y - 20, width: logoDims.width, height: logoDims.height });
+            } catch (e) { console.error('Logo embed error', e); }
+        }
+
+        page.drawText(appName.toUpperCase(), { x: 150, y, size: 18, font: fontBold });
+        y -= 20;
+        if (record.site_address) {
+            page.drawText(record.site_address, { x: 150, y, size: 10, font });
+            y -= 15;
+        }
+        y -= 20; // 留出间隔
+
+        // 绘制记录信息
+        page.drawText('Attendance Record', { x: 50, y, size: 16, font: fontBold, color: rgb(0.1, 0.2, 0.5) });
+        y -= 30;
         page.drawText(`Worker: ${record.full_name} (${record.email})`, { x: 50, y, size: 12, font });
         y -= 20;
         page.drawText(`Site: ${record.location_name || record.site_name || 'N/A'}`, { x: 50, y, size: 12, font });
-        y -= 40;
+        y -= 30;
 
         page.drawText('Check In Information', { x: 50, y, size: 14, font: fontBold });
         y -= 20;
         page.drawText(`Time: ${new Date(record.check_in_device_at).toLocaleString()}`, { x: 50, y, size: 12, font });
         y -= 20;
         page.drawText(`GPS: ${record.check_in_lat || 'N/A'}, ${record.check_in_lng || 'N/A'}`, { x: 50, y, size: 12, font });
-        y -= 40;
+        y -= 20;
 
         const s3 = new S3Client({
             region: process.env.AWS_REGION || 'us-east-2',
@@ -350,22 +377,23 @@ async function handleGeneratePdf(req, res) {
             if (phasePhotos.length === 0) return;
 
             page.drawText(phaseLabel, { x: 50, y, size: 12, font: fontBold });
-            y -= 100;
+            y -= 110; // 留出足够的高度放图片
             let x = 50;
 
             for (const photo of phasePhotos) {
                 try {
                     const imgBuffer = await getPhotoBuffer(photo.file_path);
                     const image = await pdfDoc.embedJpg(imgBuffer);
-                    const imgDims = image.scale(0.3);
+                    // 🌟 关键修复：限制图片大小在 140x90 内，防止覆盖文字
+                    const imgDims = image.scaleToFit(140, 90);
                     page.drawImage(image, { x, y, width: imgDims.width, height: imgDims.height });
-                    x += imgDims.width + 10;
+                    x += imgDims.width + 15;
                 } catch (e) {
                     page.drawText('[Image error]', { x, y, size: 10, font, color: rgb(1, 0, 0) });
                     x += 100;
                 }
             }
-            y -= 40;
+            y -= 20;
         };
 
         await addPhotosToPage('Location Photo', 'location');
@@ -377,7 +405,7 @@ async function handleGeneratePdf(req, res) {
         page.drawText(`Time: ${record.check_out_device_at ? new Date(record.check_out_device_at).toLocaleString() : 'N/A'}`, { x: 50, y, size: 12, font });
         y -= 20;
         page.drawText(`GPS: ${record.check_out_lat || 'N/A'}, ${record.check_out_lng || 'N/A'}`, { x: 50, y, size: 12, font });
-        y -= 40;
+        y -= 20;
 
         await addPhotosToPage('Checkout Location', 'checkout_location');
         await addPhotosToPage('After Photos', 'after');

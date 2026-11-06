@@ -181,7 +181,6 @@ async function showRecord(id) {
     bg.querySelector('#closemodal').onclick = () => bg.remove();
     bg.onclick = e => { if (e.target === bg) bg.remove() };
 
-    // 🌟 修改点：点击按钮向后端请求生成 PDF
     bg.querySelector('#downloadPDF').onclick = async () => {
         try {
             toast('Generating PDF...');
@@ -243,18 +242,44 @@ function renderCheck(mode = 'checkin') {
 
     if (mode === 'checkin') {
         const canCheckIn = active.length === 0;
-        layout(`<section class="panel"><div class="flex between"><h2>Check In Form</h2>${canCheckIn ? '<span class="pill ok">Ready to check in</span>' : '<span class="pill wait">Checkout required first</span>'}</div>${canCheckIn ? `<form id="checkin"><div class="field"><label>Check-in Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Location *</label><input name="location_name" required maxlength="200" placeholder="Enter location"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-in">Get GPS Location</button><span class="muted tiny" id="gps-in-status">Not captured</span></div></div><div class="field"><label>Location Photo *</label><button class="btn alt" type="button" id="camera-in">Take Location Photo</button><span class="muted tiny" id="camera-in-status"></span></div><div class="field"><label>Before Photo(s) *</label><button class="btn alt" type="button" id="camera-in-more">Add Before Photo(s)</button><span class="muted tiny" id="camera-in-more-status">Photos are saved together</span></div><div class="field"><label>Condition Notes (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check In</button></form>` : `<p class="notice">You are currently checked in. Please complete Check Out before checking in at another point.</p><button class="btn" id="go-checkout">Go to Check Out Form</button>`}</section>`);
+        layout(`<section class="panel"><div class="flex between"><h2>Check In Form</h2>${canCheckIn ? '<span class="pill ok">Ready to check in</span>' : '<span class="pill wait">Checkout required first</span>'}</div>${canCheckIn ? `<form id="checkin"><div class="field"><label>Check-in Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Location *</label><input name="location_name" required maxlength="200" placeholder="Enter location"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-in">Get GPS Location</button><span class="muted tiny" id="gps-in-status">Not captured</span></div></div><div class="field"><label>Location Photo *</label><button class="btn alt" type="button" id="camera-in">Take Location Photo</button><span class="muted tiny" id="camera-in-status"></span><div id="loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div></div><div class="field"><label>Before Photo(s) *</label><button class="btn alt" type="button" id="camera-in-more">Add Before Photo(s)</button><span class="muted tiny" id="camera-in-more-status">Photos are saved together</span><div id="before-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div></div><div class="field"><label>Condition Notes (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check In</button></form>` : `<p class="notice">You are currently checked in. Please complete Check Out before checking in at another point.</p><button class="btn" id="go-checkout">Go to Check Out Form</button>`}</section>`);
         let gpsIn = null, locationPhoto = null, beforePhotos = [];
         const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
+
         $('#gps-in')?.addEventListener('click', () => getGps(g => { gpsIn = g; $('#gps-in-status').textContent = gpsText(g) }));
-        $('#camera-in')?.addEventListener('click', () => openCamera(files => {
-            locationPhoto = files[0];
-            $('#camera-in-status').textContent = `1 location photo captured`;
-        }));
-        $('#camera-in-more')?.addEventListener('click', () => openCamera(files => {
-            beforePhotos = beforePhotos.concat(files);
-            $('#camera-in-more-status').textContent = `${beforePhotos.length} before photo(s) captured`;
-        }));
+
+        // 🌟 原生文件上传替代自定义相机
+        $('#camera-in')?.addEventListener('click', () => {
+            const input = document.createElement('input');
+            input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    locationPhoto = file;
+                    $('#camera-in-status').textContent = `1 location photo captured`;
+                    $('#loc-preview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
+                }
+            };
+            input.click();
+        });
+
+        $('#camera-in-more')?.addEventListener('click', () => {
+            const input = document.createElement('input');
+            input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    beforePhotos.push(file);
+                    $('#camera-in-more-status').textContent = `${beforePhotos.length} before photo(s) captured`;
+                    const img = document.createElement('img');
+                    img.src = URL.createObjectURL(file);
+                    img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
+                    $('#before-preview').appendChild(img);
+                }
+            };
+            input.click();
+        });
+
         $('#go-checkout')?.addEventListener('click', () => { selectedCheckoutId = null; view = 'checkout'; render() });
         $('#checkin')?.addEventListener('submit', async e => {
             e.preventDefault();
@@ -272,20 +297,44 @@ function renderCheck(mode = 'checkin') {
     } else {
         let chosen = active.find(x => x.id === selectedCheckoutId) || null;
         layout(`<section class="panel"><div class="flex between"><h2>Check Out Form</h2><span class="pill ${active.length ? 'wait' : 'ok'}">${active.length ? 'Check-in active' : 'No active check-in'}</span></div>${active.length ? `<div class="field"><label>Check Out Location *</label><select id="checkout-record"><option value="">Select the location to check out</option>${active.map(x => `<option value="${esc(x.id)}" ${chosen?.id === x.id ? 'selected' : ''}>${esc(x.location_name || x.site_name || 'Unnamed location')} — ${fmt(x.check_in_device_at)}</option>`).join('')}</select></div><div id="checkout-form-area">${chosen ? checkoutFormMarkup(chosen) : '<p class="notice">Select an active check-in above to open its Check Out form.</p>'}</div>` : '<p class="notice">There are no active check-ins to check out.</p><button class="btn" id="go-checkin">Go to Check In Form</button>'}</section>`);
+
         const bindOutForm = (r) => {
             const form = $('#checkout'); if (!form) return;
             let gpsOut = null, checkoutLocPhoto = null, afterPhotos = [];
             const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
             $('#gps-out').onclick = () => getGps(g => { gpsOut = g; $('#gps-out-status').textContent = gpsText(g) });
 
-            $('#camera-out').onclick = () => openCamera(files => {
-                checkoutLocPhoto = files[0];
-                $('#camera-out-status').textContent = `1 checkout location photo captured`;
-            });
-            $('#camera-out-more').onclick = () => openCamera(files => {
-                afterPhotos = afterPhotos.concat(files);
-                $('#camera-out-status').textContent = `${afterPhotos.length} after photo(s) captured`;
-            });
+            // 🌟 原生文件上传替代自定义相机
+            $('#camera-out').onclick = () => {
+                const input = document.createElement('input');
+                input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+                input.onchange = (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        checkoutLocPhoto = file;
+                        $('#camera-out-status').textContent = `1 checkout location photo captured`;
+                        $('#out-loc-preview').innerHTML = `<img src="${URL.createObjectURL(file)}" style="height:80px;border-radius:4px;object-fit:cover;">`;
+                    }
+                };
+                input.click();
+            };
+
+            $('#camera-out-more').onclick = () => {
+                const input = document.createElement('input');
+                input.type = 'file'; input.accept = 'image/*'; input.capture = 'environment';
+                input.onchange = (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        afterPhotos.push(file);
+                        $('#camera-out-status').textContent = `${afterPhotos.length} after photo(s) captured`;
+                        const img = document.createElement('img');
+                        img.src = URL.createObjectURL(file);
+                        img.style.height = '80px'; img.style.borderRadius = '4px'; img.style.objectFit = 'cover';
+                        $('#after-preview').appendChild(img);
+                    }
+                };
+                input.click();
+            };
 
             form.onsubmit = async e => {
                 e.preventDefault();
@@ -312,41 +361,7 @@ function renderCheck(mode = 'checkin') {
 }
 
 function checkoutFormMarkup(r) {
-    return `<div class="status"><strong>${esc(r.location_name || r.site_name || 'Unnamed location')}</strong><div class="tiny muted">Checked in at ${fmt(r.check_in_device_at)}</div></div><form id="checkout"><div class="field"><label>Check-out Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Check Out Location *</label><input name="checkout_location" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-out">Get GPS Location</button><span class="muted tiny" id="gps-out-status">Not captured</span></div></div><div class="field"><label>Checkout Location Photo *</label><button class="btn alt" type="button" id="camera-out">Take Checkout Location Photo</button></div><div class="field"><label>After Photo(s) *</label><div class="flex"><button class="btn alt" type="button" id="camera-out-more">Take After Photo(s)</button></div><span class="muted tiny" id="camera-out-status">No photos captured</span></div><div class="field"><label>After Note (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check Out</button></form>`;
-}
-
-async function openCamera(onDone) {
-    if (!navigator.mediaDevices?.getUserMedia) { toast('Live camera requires a supported browser and HTTPS connection.'); return; }
-    let stream, files = [];
-    const bg = document.createElement('div'); bg.className = 'modalbg';
-    bg.innerHTML = `<div class="modal"><div class="flex between"><h2>Take Photo</h2><button class="btn alt" id="camera-close">Cancel</button></div><video id="camera-video" autoplay playsinline style="width:100%;max-height:55vh;background:#111;border-radius:12px"></video><canvas id="camera-canvas" style="display:none"></canvas><p class="muted" id="camera-count">0 photos captured</p><div class="flex"><button class="btn" id="camera-shot">Capture Photo</button><button class="btn good" id="camera-done">Use Photos</button></div></div>`;
-    document.body.append(bg);
-    const close = () => { try { stream?.getTracks().forEach(t => t.stop()) } catch { } bg.remove() };
-    bg.querySelector('#camera-close').onclick = close;
-    bg.onclick = e => { if (e.target === bg) close() };
-    try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
-        bg.querySelector('#camera-video').srcObject = stream;
-    } catch (e) {
-        close(); toast('Cannot open camera. Please allow camera permission and use HTTPS.'); return;
-    }
-    bg.querySelector('#camera-shot').onclick = async () => {
-        const v = bg.querySelector('#camera-video'), c = bg.querySelector('#camera-canvas');
-        if (!v.videoWidth) return toast('Camera is not ready yet.');
-        const scale = Math.min(1, 1600 / Math.max(v.videoWidth, v.videoHeight));
-        c.width = Math.round(v.videoWidth * scale);
-        c.height = Math.round(v.videoHeight * scale);
-        c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-        const blob = await new Promise(resolve => c.toBlob(resolve, 'image/jpeg', .85));
-        if (blob) {
-            files.push(new File([blob], `camera-${Date.now()}-${files.length + 1}.jpg`, { type: 'image/jpeg' }));
-            bg.querySelector('#camera-count').textContent = `${files.length} photo(s) captured`;
-        }
-    };
-    bg.querySelector('#camera-done').onclick = () => {
-        if (!files.length) { toast('Please capture at least one photo.'); return; }
-        close(); onDone(files);
-    };
+    return `<div class="status"><strong>${esc(r.location_name || r.site_name || 'Unnamed location')}</strong><div class="tiny muted">Checked in at ${fmt(r.check_in_device_at)}</div></div><form id="checkout"><div class="field"><label>Check-out Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Check Out Location *</label><input name="checkout_location" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-out">Get GPS Location</button><span class="muted tiny" id="gps-out-status">Not captured</span></div></div><div class="field"><label>Checkout Location Photo *</label><button class="btn alt" type="button" id="camera-out">Take Checkout Location Photo</button><div id="out-loc-preview" style="display:flex; gap:10px; margin-top:10px;"></div></div><div class="field"><label>After Photo(s) *</label><div class="flex"><button class="btn alt" type="button" id="camera-out-more">Take After Photo(s)</button></div><span class="muted tiny" id="camera-out-status">No photos captured</span><div id="after-preview" style="display:flex; gap:10px; margin-top:10px; flex-wrap:wrap;"></div></div><div class="field"><label>After Note (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check Out</button></form>`;
 }
 
 function getGps(done) {
@@ -392,12 +407,12 @@ async function saveAction(action, id, extra, gps, files) {
             const phase = item.phase || (action === 'check_in' ? 'before' : 'after');
 
             const blob = await compress(file);
-            const buffer = await blob.arrayBuffer(); // 关键修改：转成 ArrayBuffer 存入
+            const buffer = await blob.arrayBuffer();
             await put('photos', {
                 id: uid(),
                 owner: user.id,
                 recordId: id,
-                phase: phase, // 🌟 存入自定义标签
+                phase: phase,
                 buffer: buffer,
                 type: 'image/jpeg',
                 status: 'Pending',
@@ -432,7 +447,7 @@ async function syncNow() {
                         const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
                         const cloudKey = await uploadPhotoToB2(blob);
                         if (cloudKey) {
-                            task.payload.photo_urls.push({ key: cloudKey, phase: p.phase }); // 🌟 组合对象
+                            task.payload.photo_urls.push({ key: cloudKey, phase: p.phase });
                         }
                         await del('photos', p.id);
                     } catch (photoErr) {
