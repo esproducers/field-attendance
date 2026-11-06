@@ -2,6 +2,7 @@ import pg from 'pg';
 import { scryptSync, timingSafeEqual, randomBytes, createHash, randomUUID } from 'node:crypto';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'; // 🌟 新增 PDF 生成依赖
 
 // ================= 1. 基础配置与数据库 =================
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || process.env.STORAGE_URL, max: 10 });
@@ -56,6 +57,9 @@ export default async function handler(req, res) {
         if (path === '/api/records' && method === 'GET') return handleRecords(req, res);
         if (path === '/api/records/sync' && method === 'POST') return handleRecordSync(req, res);
 
+        // 🌟 新增：PDF 生成路由
+        if (path === '/api/records/download-pdf' && method === 'POST') return handleGeneratePdf(req, res);
+
         const photosMatch = path.match(/^\/api\/records\/([0-9a-f-]+)\/photos$/i);
         if (photosMatch && method === 'GET') return handleRecordPhotos(req, res, photosMatch[1]);
 
@@ -98,49 +102,29 @@ async function handleForgotPassword(req, res) {
 
     const r = await pool.query('SELECT id, full_name FROM users WHERE email=$1 AND active=true', [email.toLowerCase().trim()]);
     const user = r.rows[0];
-    // 即使用户不存在，也返回成功，防止恶意探测邮箱
     if (!user) return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
 
-    // 生成 Token
     const rawToken = randomBytes(32).toString('hex');
     const hashedToken = tokenHash(rawToken);
     await pool.query(`INSERT INTO password_reset_tokens(user_id, token_hash, expires_at) VALUES($1, $2, now() + interval '1 hour')`, [user.id, hashedToken]);
 
-    // 拼接重置链接 (如果 Vercel 没有配置 APP_URL，则默认使用你的域名)
     const resetUrl = `${process.env.APP_URL || 'https://sigifood-mechandiser-tracking.vercel.app'}/?reset_token=${rawToken}`;
 
-    // 🌟 调用 Google Apps Script 发送邮件
     try {
-        const scriptUrl = process.env.APPS_SCRIPT_URL; // 从 Vercel 环境变量读取
-        if (!scriptUrl) throw new Error('APPS_SCRIPT_URL is not configured');
-
-        const response = await fetch(scriptUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            redirect: 'follow',
-            body: JSON.stringify({
-                to: email,
-                subject: 'Password Reset Request',
-                html: `<p>Hello ${clean(user.full_name, 50)},</p><p>Click the link below to reset your password. This link is valid for 1 hour.</p><p><a href="${resetUrl}">Reset Password</a></p><p>If you didn't request this, ignore this email.</p>`
-            })
-        });
-
-        if (!response.ok) {
-            const errText = await response.text();
-            console.error('Apps Script HTTP Error:', response.status, errText);
-        } else {
-            const text = await response.text();
-            try {
-                const result = JSON.parse(text);
-                if (!result.ok) console.error('Apps Script Email Failed:', result.error);
-                else console.log('Email sent successfully via Apps Script');
-            } catch (parseErr) {
-                console.warn('Apps Script returned non-JSON response:', text);
-            }
+        const scriptUrl = process.env.APPS_SCRIPT_URL;
+        if (scriptUrl) {
+            await fetch(scriptUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                redirect: 'follow',
+                body: JSON.stringify({
+                    to: email,
+                    subject: 'Password Reset Request',
+                    html: `<p>Hello ${clean(user.full_name, 50)},</p><p>Click the link below to reset your password. This link is valid for 1 hour.</p><p><a href="${resetUrl}">Reset Password</a></p><p>If you didn't request this, ignore this email.</p>`
+                })
+            });
         }
-    } catch (err) {
-        console.error('Failed to fetch Apps Script:', err);
-    }
+    } catch (err) { console.error('Email failed:', err); }
 
     return res.status(200).json({ ok: true, message: 'If an account exists, a reset link has been sent.' });
 }
@@ -181,7 +165,6 @@ async function handleSignup(req, res) {
         const u = r.rows[0];
         const token = randomBytes(32).toString('hex');
         await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-        // 使用 SameSite=Lax 避免部分浏览器直接丢弃 Cookie
         res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Lax`);
         return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
     } catch (e) {
@@ -200,7 +183,6 @@ async function handleLogin(req, res) {
     }
     const token = randomBytes(32).toString('hex');
     await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-    // 使用 SameSite=Lax 避免部分浏览器直接丢弃 Cookie
     res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Lax`);
     return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
 }
@@ -276,7 +258,7 @@ async function handleRecordSync(req, res) {
     const lat = b.latitude || null;
     const lng = b.longitude || null;
     const accuracy = b.accuracy || null;
-    const photoKeys = b.photo_urls || []; // 注意这里现在存的是 fileKey
+    const photoKeys = b.photo_urls || [];
 
     const client = await pool.connect();
     try {
@@ -289,17 +271,21 @@ async function handleRecordSync(req, res) {
                                 VALUES($1,$2,$3,$4,now(),$5,$6,$7,$8,'checked_in') ON CONFLICT(id) DO NOTHING`,
                 [b.id, u.id, location, time, lat, lng, accuracy, clean(b.notes, 3000)]);
 
-            for (const key of photoKeys) {
-                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'before',$3,'image/jpeg',0,$4)`,
-                    [randomUUID(), b.id, key, randomUUID()]);
+            for (const photo of photoKeys) {
+                const key = typeof photo === 'string' ? photo : photo.key;
+                const phase = typeof photo === 'string' ? 'before' : (photo.phase || 'before');
+                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,$3,$4,'image/jpeg',0,$5)`,
+                    [randomUUID(), b.id, phase, key, randomUUID()]);
             }
         } else {
             await client.query(`UPDATE attendance_records SET check_out_device_at=$3,check_out_received_at=now(),check_out_lat=$4,check_out_lng=$5,check_out_accuracy=$6,check_out_location_name=$7,check_out_notes=$8,status='completed',updated_at=now() 
                                 WHERE id=$1 AND user_id=$2 AND check_out_device_at IS NULL`,
                 [b.id, u.id, time, lat, lng, accuracy, location, clean(b.notes, 3000)]);
-            for (const key of photoKeys) {
-                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'after',$3,'image/jpeg',0,$4)`,
-                    [randomUUID(), b.id, key, randomUUID()]);
+            for (const photo of photoKeys) {
+                const key = typeof photo === 'string' ? photo : photo.key;
+                const phase = typeof photo === 'string' ? 'after' : (photo.phase || 'after');
+                await client.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,$3,$4,'image/jpeg',0,$5)`,
+                    [randomUUID(), b.id, phase, key, randomUUID()]);
             }
         }
         await client.query('COMMIT');
@@ -310,6 +296,104 @@ async function handleRecordSync(req, res) {
     } finally { client.release(); }
 }
 
+// 🌟 新增：PDF 生成路由
+async function handleGeneratePdf(req, res) {
+    try {
+        const u = await getAuthUser(req);
+        const body = await getBody(req);
+        const { recordId } = body;
+
+        const r = await pool.query(`SELECT a.*, u.full_name, u.email FROM attendance_records a JOIN users u ON a.user_id=u.id WHERE a.id=$1 AND (a.user_id=$2 OR $3='admin')`, [recordId, u.id, u.role]);
+        const record = r.rows[0];
+        if (!record) return res.status(404).json({ error: 'Record not found' });
+
+        const p = await pool.query(`SELECT phase, file_path FROM photos WHERE attendance_id=$1`, [recordId]);
+        const photos = p.rows;
+
+        const pdfDoc = await PDFDocument.create();
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+        const page = pdfDoc.addPage([600, 800]);
+        let y = 750;
+
+        page.drawText('Attendance Record', { x: 50, y, size: 24, font: fontBold, color: rgb(0.1, 0.2, 0.5) });
+        y -= 40;
+        page.drawText(`Worker: ${record.full_name} (${record.email})`, { x: 50, y, size: 12, font });
+        y -= 20;
+        page.drawText(`Site: ${record.location_name || record.site_name || 'N/A'}`, { x: 50, y, size: 12, font });
+        y -= 40;
+
+        page.drawText('Check In Information', { x: 50, y, size: 14, font: fontBold });
+        y -= 20;
+        page.drawText(`Time: ${new Date(record.check_in_device_at).toLocaleString()}`, { x: 50, y, size: 12, font });
+        y -= 20;
+        page.drawText(`GPS: ${record.check_in_lat || 'N/A'}, ${record.check_in_lng || 'N/A'}`, { x: 50, y, size: 12, font });
+        y -= 40;
+
+        const s3 = new S3Client({
+            region: process.env.AWS_REGION || 'us-east-2',
+            endpoint: process.env.AWS_ENDPOINT_URL_S3,
+            credentials: { accessKeyId: process.env.AWS_ACCESS_KEY_ID, secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY },
+            forcePathStyle: true,
+        });
+
+        const getPhotoBuffer = async (fileKey) => {
+            const command = new GetObjectCommand({ Bucket: process.env.AWS_BUCKET_NAME, Key: fileKey });
+            const url = await getSignedUrl(s3, command, { expiresIn: 60 });
+            const imgRes = await fetch(url);
+            return await imgRes.arrayBuffer();
+        };
+
+        const addPhotosToPage = async (phaseLabel, phaseKey) => {
+            const phasePhotos = photos.filter(p => p.phase === phaseKey).slice(0, 2);
+            if (phasePhotos.length === 0) return;
+
+            page.drawText(phaseLabel, { x: 50, y, size: 12, font: fontBold });
+            y -= 100;
+            let x = 50;
+
+            for (const photo of phasePhotos) {
+                try {
+                    const imgBuffer = await getPhotoBuffer(photo.file_path);
+                    const image = await pdfDoc.embedJpg(imgBuffer);
+                    const imgDims = image.scale(0.3);
+                    page.drawImage(image, { x, y, width: imgDims.width, height: imgDims.height });
+                    x += imgDims.width + 10;
+                } catch (e) {
+                    page.drawText('[Image error]', { x, y, size: 10, font, color: rgb(1, 0, 0) });
+                    x += 100;
+                }
+            }
+            y -= 40;
+        };
+
+        await addPhotosToPage('Location Photo', 'location');
+        await addPhotosToPage('Before Photos', 'before');
+
+        y -= 10;
+        page.drawText('Check Out Information', { x: 50, y, size: 14, font: fontBold });
+        y -= 20;
+        page.drawText(`Time: ${record.check_out_device_at ? new Date(record.check_out_device_at).toLocaleString() : 'N/A'}`, { x: 50, y, size: 12, font });
+        y -= 20;
+        page.drawText(`GPS: ${record.check_out_lat || 'N/A'}, ${record.check_out_lng || 'N/A'}`, { x: 50, y, size: 12, font });
+        y -= 40;
+
+        await addPhotosToPage('Checkout Location', 'checkout_location');
+        await addPhotosToPage('After Photos', 'after');
+
+        const pdfBytes = await pdfDoc.save();
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="Attendance-${record.full_name}-${Date.now()}.pdf"`);
+        return res.status(200).send(Buffer.from(pdfBytes));
+
+    } catch (e) {
+        console.error('PDF Gen Error:', e);
+        return res.status(500).json({ error: 'Failed to generate PDF: ' + e.message });
+    }
+}
+
 async function handleRecordPhotos(req, res, recordId) {
     const u = await getAuthUser(req);
     const r = await pool.query(`SELECT p.id,p.phase,p.file_path as url FROM photos p JOIN attendance_records a ON a.id=p.attendance_id WHERE a.id=$1 AND (a.user_id=$2 OR $3='admin')`, [recordId, u.id, u.role]);
@@ -318,12 +402,11 @@ async function handleRecordPhotos(req, res, recordId) {
 
 async function handleOrphanBind(req, res) {
     const body = await getBody(req);
-    const { recordId, url } = body; // url 实际上是 fileKey
+    const { recordId, url } = body;
     await pool.query(`INSERT INTO photos(id,attendance_id,phase,file_path,mime_type,byte_size,checksum_sha256) VALUES($1,$2,'after',$3,'image/jpeg',0,$4)`, [randomUUID(), recordId, url, randomUUID()]);
     return res.status(200).json({ ok: true });
 }
 
-// 🌟 使用 Neon 对象存储生成上传链接
 async function handleGetUploadUrl(req, res) {
     try {
         await getAuthUser(req);
@@ -334,7 +417,7 @@ async function handleGetUploadUrl(req, res) {
                 accessKeyId: process.env.AWS_ACCESS_KEY_ID,
                 secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
             },
-            forcePathStyle: true, // Neon 必须使用路径风格
+            forcePathStyle: true,
         });
         const fileKey = `photos/${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
         const command = new PutObjectCommand({
@@ -350,7 +433,6 @@ async function handleGetUploadUrl(req, res) {
     }
 }
 
-// 🌟 使用 Neon 对象存储生成临时下载链接
 async function handleGetDownloadUrl(req, res) {
     try {
         await getAuthUser(req);
@@ -365,14 +447,14 @@ async function handleGetDownloadUrl(req, res) {
                 accessKeyId: process.env.AWS_ACCESS_KEY_ID,
                 secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
             },
-            forcePathStyle: true, // Neon 必须使用路径风格
+            forcePathStyle: true,
         });
 
         const command = new GetObjectCommand({
             Bucket: process.env.AWS_BUCKET_NAME,
             Key: fileKey
         });
-        const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 }); // 15分钟有效
+        const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
         return res.status(200).json({ downloadUrl: presignedUrl });
     } catch (e) {
         console.error('Neon Download Error:', e);

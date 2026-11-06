@@ -135,7 +135,6 @@ async function showRecord(id) {
     let photos = [];
     try {
         photos = (await api(`/api/records/${id}/photos`)).photos;
-        // 🌟 循环获取临时下载链接
         for (let p of photos) {
             if (p.url) {
                 try {
@@ -147,10 +146,67 @@ async function showRecord(id) {
     } catch (e) { toast(e.message) }
 
     const bg = document.createElement('div'); bg.className = 'modalbg';
-    bg.innerHTML = `<div class="modal"><div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="closemodal">Close</button></div><p><strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email)})</p><p><strong>Site:</strong> ${esc(r.location_name || r.site_name)}</p><h3>Check In Information</h3><p><strong>Check-in time:</strong> ${fmt(r.check_in_device_at)}</p><p><strong>Check-in location:</strong> ${esc(r.location_name || r.site_name || '—')}</p><p><strong>Check-in GPS:</strong> ${esc(r.check_in_lat ?? '—')}, ${esc(r.check_in_lng ?? '—')} ${r.check_in_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_in_lat + ',' + r.check_in_lng)}">Map</a>` : ''}</p><p><strong>Check-in notes:</strong> ${esc(r.check_in_notes || r.notes || '—')}</p><h3>All Check-in Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'before').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Before photo"></a>`).join('') || 'None'}</div><h3>Check Out Information</h3><p><strong>Check-out time:</strong> ${fmt(r.check_out_device_at)}</p><p><strong>Check-out location:</strong> ${esc(r.check_out_location_name || r.location_name || '—')}</p><p><strong>Check-out GPS:</strong> ${esc(r.check_out_lat ?? '—')}, ${esc(r.check_out_lng ?? '—')} ${r.check_out_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_out_lat + ',' + r.check_out_lng)}">Map</a>` : ''}</p><p><strong>Check-out notes:</strong> ${esc(r.check_out_notes || '—')}</p><h3>All Check-out Photos</h3><div class="photo-row">${photos.filter(p => p.phase === 'after').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="After photo"></a>`).join('') || 'None'}</div></div>`;
+    bg.innerHTML = `<div class="modal">
+    <div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="closemodal">Close</button></div>
+    <p><strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email)})</p>
+    <p><strong>Site:</strong> ${esc(r.location_name || r.site_name)}</p>
+    
+    <h3>Check In Information</h3>
+    <p><strong>Check-in time:</strong> ${fmt(r.check_in_device_at)}</p>
+    <p><strong>Check-in location:</strong> ${esc(r.location_name || r.site_name || '—')}</p>
+    <p><strong>Check-in GPS:</strong> ${esc(r.check_in_lat ?? '—')}, ${esc(r.check_in_lng ?? '—')} ${r.check_in_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_in_lat + ',' + r.check_in_lng)}">Map</a>` : ''}</p>
+    <p><strong>Check-in notes:</strong> ${esc(r.check_in_notes || r.notes || '—')}</p>
+    
+    <h4>Location Photo</h4>
+    <div class="photo-row">${photos.filter(p => p.phase === 'location').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Location photo"></a>`).join('') || 'None'}</div>
+    <h4>Before Photo(s)</h4>
+    <div class="photo-row">${photos.filter(p => p.phase === 'before').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Before photo"></a>`).join('') || 'None'}</div>
+    
+    <h3>Check Out Information</h3>
+    <p><strong>Check-out time:</strong> ${fmt(r.check_out_device_at)}</p>
+    <p><strong>Check-out location:</strong> ${esc(r.check_out_location_name || r.location_name || '—')}</p>
+    <p><strong>Check-out GPS:</strong> ${esc(r.check_out_lat ?? '—')}, ${esc(r.check_out_lng ?? '—')} ${r.check_out_lat != null ? `<a target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(r.check_out_lat + ',' + r.check_out_lng)}">Map</a>` : ''}</p>
+    <p><strong>Check-out notes:</strong> ${esc(r.check_out_notes || '—')}</p>
+    
+    <h4>Checkout Location Photo</h4>
+    <div class="photo-row">${photos.filter(p => p.phase === 'checkout_location').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="Checkout location photo"></a>`).join('') || 'None'}</div>
+    <h4>After Photo(s)</h4>
+    <div class="photo-row">${photos.filter(p => p.phase === 'after').map(p => `<a target="_blank" href="${p.displayUrl}"><img class="thumb" src="${p.displayUrl}" alt="After photo"></a>`).join('') || 'None'}</div>
+    
+    <div style="margin-top: 20px; text-align: right;">
+        <button class="btn" id="downloadPDF">Download PDF</button>
+    </div>
+    </div>`;
     document.body.append(bg);
     bg.querySelector('#closemodal').onclick = () => bg.remove();
     bg.onclick = e => { if (e.target === bg) bg.remove() };
+
+    // 🌟 修改点：点击按钮向后端请求生成 PDF
+    bg.querySelector('#downloadPDF').onclick = async () => {
+        try {
+            toast('Generating PDF...');
+            const response = await fetch('/api/records/download-pdf', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recordId: id })
+            });
+
+            if (!response.ok) {
+                const err = await response.json();
+                throw new Error(err.error || 'Failed to generate PDF');
+            }
+
+            const blob = await response.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `Attendance-${r.full_name}-${Date.now()}.pdf`;
+            document.body.append(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+            toast('PDF downloaded successfully.');
+        } catch (err) {
+            toast('Error: ' + err.message);
+        }
+    };
 }
 
 function editUser(id) {
@@ -188,36 +244,61 @@ function renderCheck(mode = 'checkin') {
     if (mode === 'checkin') {
         const canCheckIn = active.length === 0;
         layout(`<section class="panel"><div class="flex between"><h2>Check In Form</h2>${canCheckIn ? '<span class="pill ok">Ready to check in</span>' : '<span class="pill wait">Checkout required first</span>'}</div>${canCheckIn ? `<form id="checkin"><div class="field"><label>Check-in Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Location *</label><input name="location_name" required maxlength="200" placeholder="Enter location"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-in">Get GPS Location</button><span class="muted tiny" id="gps-in-status">Not captured</span></div></div><div class="field"><label>Location Photo *</label><button class="btn alt" type="button" id="camera-in">Take Location Photo</button><span class="muted tiny" id="camera-in-status"></span></div><div class="field"><label>Before Photo(s) *</label><button class="btn alt" type="button" id="camera-in-more">Add Before Photo(s)</button><span class="muted tiny" id="camera-in-more-status">Photos are saved together</span></div><div class="field"><label>Condition Notes (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check In</button></form>` : `<p class="notice">You are currently checked in. Please complete Check Out before checking in at another point.</p><button class="btn" id="go-checkout">Go to Check Out Form</button>`}</section>`);
-        let gpsIn = null, inPhotos = [];
+        let gpsIn = null, locationPhoto = null, beforePhotos = [];
         const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
         $('#gps-in')?.addEventListener('click', () => getGps(g => { gpsIn = g; $('#gps-in-status').textContent = gpsText(g) }));
-        const takeIn = () => openCamera(files => { inPhotos = inPhotos.concat(files); $('#camera-in-status').textContent = `${inPhotos.length} photo(s) captured`; $('#camera-in-more-status').textContent = `${inPhotos.length} photo(s) captured` });
-        $('#camera-in')?.addEventListener('click', takeIn);
-        $('#camera-in-more')?.addEventListener('click', takeIn);
+        $('#camera-in')?.addEventListener('click', () => openCamera(files => {
+            locationPhoto = files[0];
+            $('#camera-in-status').textContent = `1 location photo captured`;
+        }));
+        $('#camera-in-more')?.addEventListener('click', () => openCamera(files => {
+            beforePhotos = beforePhotos.concat(files);
+            $('#camera-in-more-status').textContent = `${beforePhotos.length} before photo(s) captured`;
+        }));
         $('#go-checkout')?.addEventListener('click', () => { selectedCheckoutId = null; view = 'checkout'; render() });
         $('#checkin')?.addEventListener('submit', async e => {
             e.preventDefault();
             const f = e.target;
             if (!gpsIn) return toast('Please get GPS Location before submitting.');
-            if (!inPhotos.length) return toast('Please take at least one photo.');
-            await saveAction('check_in', uid(), { location_name: f.location_name.value.trim(), notes: f.notes.value }, gpsIn, inPhotos);
+            if (!locationPhoto) return toast('Please take a Location Photo.');
+            if (!beforePhotos.length) return toast('Please take at least one Before Photo.');
+
+            const allPhotos = [
+                { file: locationPhoto, phase: 'location' },
+                ...beforePhotos.map(file => ({ file, phase: 'before' }))
+            ];
+            await saveAction('check_in', uid(), { location_name: f.location_name.value.trim(), notes: f.notes.value }, gpsIn, allPhotos);
         });
     } else {
         let chosen = active.find(x => x.id === selectedCheckoutId) || null;
         layout(`<section class="panel"><div class="flex between"><h2>Check Out Form</h2><span class="pill ${active.length ? 'wait' : 'ok'}">${active.length ? 'Check-in active' : 'No active check-in'}</span></div>${active.length ? `<div class="field"><label>Check Out Location *</label><select id="checkout-record"><option value="">Select the location to check out</option>${active.map(x => `<option value="${esc(x.id)}" ${chosen?.id === x.id ? 'selected' : ''}>${esc(x.location_name || x.site_name || 'Unnamed location')} — ${fmt(x.check_in_device_at)}</option>`).join('')}</select></div><div id="checkout-form-area">${chosen ? checkoutFormMarkup(chosen) : '<p class="notice">Select an active check-in above to open its Check Out form.</p>'}</div>` : '<p class="notice">There are no active check-ins to check out.</p><button class="btn" id="go-checkin">Go to Check In Form</button>'}</section>`);
         const bindOutForm = (r) => {
             const form = $('#checkout'); if (!form) return;
-            let gpsOut = null, outPhotos = [];
+            let gpsOut = null, checkoutLocPhoto = null, afterPhotos = [];
             const gpsText = g => `${g.latitude.toFixed(5)}, ${g.longitude.toFixed(5)} ±${Math.round(g.accuracy)}m`;
             $('#gps-out').onclick = () => getGps(g => { gpsOut = g; $('#gps-out-status').textContent = gpsText(g) });
-            $('#camera-out').onclick = () => openCamera(files => { outPhotos = outPhotos.concat(files); $('#camera-out-status').textContent = `${outPhotos.length} photo(s) captured` });
-            $('#camera-out-more').onclick = () => openCamera(files => { outPhotos = outPhotos.concat(files); $('#camera-out-status').textContent = `${outPhotos.length} photo(s) captured` });
+
+            $('#camera-out').onclick = () => openCamera(files => {
+                checkoutLocPhoto = files[0];
+                $('#camera-out-status').textContent = `1 checkout location photo captured`;
+            });
+            $('#camera-out-more').onclick = () => openCamera(files => {
+                afterPhotos = afterPhotos.concat(files);
+                $('#camera-out-status').textContent = `${afterPhotos.length} after photo(s) captured`;
+            });
+
             form.onsubmit = async e => {
                 e.preventDefault();
                 const f = e.target;
                 if (!gpsOut) return toast('Please get GPS Location before submitting.');
-                if (!outPhotos.length) return toast('Please take at least one after photo.');
-                await saveAction('check_out', r.id, { location_name: f.checkout_location.value.trim(), notes: f.notes.value }, gpsOut, outPhotos);
+                if (!checkoutLocPhoto) return toast('Please take a Checkout Location Photo.');
+                if (!afterPhotos.length) return toast('Please take at least one After Photo.');
+
+                const allPhotos = [
+                    { file: checkoutLocPhoto, phase: 'checkout_location' },
+                    ...afterPhotos.map(file => ({ file, phase: 'after' }))
+                ];
+                await saveAction('check_out', r.id, { location_name: f.checkout_location.value.trim(), notes: f.notes.value }, gpsOut, allPhotos);
             };
         };
         $('#checkout-record')?.addEventListener('change', e => {
@@ -231,7 +312,7 @@ function renderCheck(mode = 'checkin') {
 }
 
 function checkoutFormMarkup(r) {
-    return `<div class="status"><strong>${esc(r.location_name || r.site_name || 'Unnamed location')}</strong><div class="tiny muted">Checked in at ${fmt(r.check_in_device_at)}</div></div><form id="checkout"><div class="field"><label>Check-out Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Check Out Location *</label><input name="checkout_location" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-out">Get GPS Location</button><span class="muted tiny" id="gps-out-status">Not captured</span></div></div><div class="field"><label>After Photos *</label><div class="flex"><button class="btn alt" type="button" id="camera-out">Take After Photo(s)</button><button class="btn alt" type="button" id="camera-out-more">Add More Photos</button></div><span class="muted tiny" id="camera-out-status">No photos captured</span></div><div class="field"><label>After Note (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check Out</button></form>`;
+    return `<div class="status"><strong>${esc(r.location_name || r.site_name || 'Unnamed location')}</strong><div class="tiny muted">Checked in at ${fmt(r.check_in_device_at)}</div></div><form id="checkout"><div class="field"><label>Check-out Time</label><input class="time-readonly" value="${esc(new Date().toLocaleString())}" readonly></div><div class="field"><label>Check Out Location *</label><input name="checkout_location" required maxlength="200" value="${esc(r.location_name || r.site_name || '')}" placeholder="Confirm customer or site name"></div><div class="field"><label>Get GPS Location *</label><div class="flex"><button class="btn alt" type="button" id="gps-out">Get GPS Location</button><span class="muted tiny" id="gps-out-status">Not captured</span></div></div><div class="field"><label>Checkout Location Photo *</label><button class="btn alt" type="button" id="camera-out">Take Checkout Location Photo</button></div><div class="field"><label>After Photo(s) *</label><div class="flex"><button class="btn alt" type="button" id="camera-out-more">Take After Photo(s)</button></div><span class="muted tiny" id="camera-out-status">No photos captured</span></div><div class="field"><label>After Note (optional)</label><textarea name="notes" rows="2" placeholder=""></textarea></div><button class="btn good" type="submit">Submit Check Out</button></form>`;
 }
 
 async function openCamera(onDone) {
@@ -291,14 +372,13 @@ async function compress(file) {
     return blob;
 }
 
-// 上传后返回 fileKey
 async function uploadPhotoToB2(fileBlob) {
     if (!fileBlob) return null;
     if (!navigator.onLine) throw new Error('Offline mode detected during B2 upload activation');
     const { uploadUrl, fileKey } = await api('/api/get-upload-url');
     const b2Response = await fetch(uploadUrl, { method: 'PUT', body: fileBlob, headers: { 'Content-Type': 'image/jpeg' } });
     if (!b2Response.ok) throw new Error('Failed to push photo to Backblaze B2.');
-    return fileKey; // 返回 key
+    return fileKey;
 }
 
 async function saveAction(action, id, extra, gps, files) {
@@ -307,15 +387,18 @@ async function saveAction(action, id, extra, gps, files) {
         const payload = { id, action, device_at: new Date().toISOString(), ...extra, ...gps, photo_urls: [] };
         const task = { key, owner: user.id, type: 'record', payload, status: 'Pending', created: Date.now(), tries: 0 };
         await put('queue', task);
-        for (const file of Array.from(files || [])) {
+        for (const item of Array.from(files || [])) {
+            const file = item.file || item;
+            const phase = item.phase || (action === 'check_in' ? 'before' : 'after');
+
             const blob = await compress(file);
             const buffer = await blob.arrayBuffer(); // 关键修改：转成 ArrayBuffer 存入
             await put('photos', {
                 id: uid(),
                 owner: user.id,
                 recordId: id,
-                phase: action === 'check_in' ? 'before' : 'after',
-                buffer: buffer, // 存 buffer
+                phase: phase, // 🌟 存入自定义标签
+                buffer: buffer,
                 type: 'image/jpeg',
                 status: 'Pending',
                 created: Date.now()
@@ -340,17 +423,17 @@ async function syncNow() {
             try {
                 const localPhotos = (await all('photos')).filter(p =>
                     p.owner === user.id &&
-                    p.recordId === task.payload.id &&
-                    p.phase === (task.payload.action === 'check_in' ? 'before' : 'after')
+                    p.recordId === task.payload.id
                 );
                 task.payload.photo_urls = task.payload.photo_urls || [];
                 for (const p of localPhotos) {
                     if (p.status === 'Synced') continue;
                     try {
-                        // 关键修改：从 ArrayBuffer 还原为 Blob
                         const blob = new Blob([p.buffer], { type: p.type || 'image/jpeg' });
                         const cloudKey = await uploadPhotoToB2(blob);
-                        if (cloudKey && !task.payload.photo_urls.includes(cloudKey)) task.payload.photo_urls.push(cloudKey);
+                        if (cloudKey) {
+                            task.payload.photo_urls.push({ key: cloudKey, phase: p.phase }); // 🌟 组合对象
+                        }
                         await del('photos', p.id);
                     } catch (photoErr) {
                         p.status = 'Failed';
@@ -537,7 +620,6 @@ function renderAuth(mode = 'login', token = '') {
         $('#resetform').onsubmit = async e => {
             e.preventDefault();
             try {
-                // 这里调用了你的 handleResetPassword 接口
                 await post('/api/reset-password', { token, new_password: e.target.password.value });
                 toast('Password updated successfully. Please sign in.');
                 window.history.replaceState({}, '', '/');
