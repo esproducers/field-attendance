@@ -16,8 +16,9 @@ const execFileAsync = promisify(execFile);
 const app = Fastify({ logger: true, bodyLimit: 2_000_000 });
 await app.register(cors, {
   origin: [
-    'https://localhost',        // Android App 的 Origin
-    'capacitor://localhost'     // iOS App 的 Origin
+    'https://localhost',       // 👈 必须有这个（对应安卓报错里的 Origin）
+    'capacitor://localhost',   // iOS 用
+    'http://localhost'         // 兼容一些本地调试
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
