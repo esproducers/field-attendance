@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">com.sigifood.attendance</string>
+    <string name="title_activity_main">com.sigifood.attendance</string>
+    <string name="package_name">com.sigifood.attendance</string>
+    <string name="custom_url_scheme">com.sigifood.attendance</string>
+</resources>

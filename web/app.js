@@ -4,13 +4,29 @@ const fmt = d => d ? new Date(d).toLocaleString() : '—';
 const uid = () => (self.crypto && crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10));
 let user = null, view = 'overview', records = [], users = [], clients = [], summary = {}, queue = [], syncing = false, selected = null, selectedCheckoutId = null, branding = { appName: 'Field Attendance', logo: '' };
 const app = () => document.getElementById('app');
+const API_BASE_URL = String(window.__API_BASE_URL__ || '').replace(/\/+$/, '');
+const API_CREDENTIALS = API_BASE_URL ? 'include' : 'same-origin';
+const apiUrl = u => /^https?:\/\//i.test(u) ? u : `${API_BASE_URL}${u}`;
+
+// 只在原生 App 且域名缺失时大声报警——Web 端静默
+if (window.Capacitor?.isNativePlatform?.() && !API_BASE_URL) {
+    console.error('[config] 原生 App 必须提供 window.__API_BASE_URL__，检查 config.js 是否在 cap sync 前生成');
+    if (document.getElementById('toast')) {
+        document.getElementById('toast').textContent = 'App 配置缺失：API 地址未设置';
+        document.getElementById('toast').style.display = 'block';
+    }
+}
 
 function toast(m) { const t = $('#toast'); if (!t) return; t.textContent = m; t.style.display = 'block'; clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = 'none', 4500) }
 
 async function api(url, opts = {}) {
     let response;
     try {
-        response = await fetch(url, { credentials: 'same-origin', ...opts, headers: { ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...opts.headers } });
+        response = await fetch(apiUrl(url), {                 // ← fetch 的 url 换成 apiUrl(url)
+            credentials: API_CREDENTIALS,                     // ← 'same-origin' 换成变量
+            ...opts,                                          // ← 注意顺序：opts 在后，不能覆盖上面的 credentials（除非显式传）
+            headers: { ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...opts.headers }
+        });
     } catch { throw new Error('Server unavailable. Your saved offline records remain on this device.'); }
     const body = response.headers.get('content-type')?.includes('application/json') ? await response.json() : null;
 
@@ -443,7 +459,7 @@ async function renderBackup() {
         } catch (err) { toast(err.message) }
     };
     async function download(url, filename) {
-        const response = await fetch(url, { credentials: 'same-origin' });
+        const response = await fetch(apiUrl(url), { credentials: API_CREDENTIALS });
         if (!response.ok) { let msg = 'Backup failed'; try { msg = (await response.json()).error || msg } catch { } throw Error(msg) }
         const blob = await response.blob();
         const a = document.createElement('a');
@@ -456,7 +472,7 @@ async function renderBackup() {
         const b = $('#manual-backup'); b.disabled = true;
         $('#backup-status').textContent = 'Creating archive…';
         try {
-            const response = await fetch('/api/admin/backup/manual', { method: 'POST', credentials: 'same-origin' });
+            const response = await fetch(apiUrl('/api/admin/backup/manual'), { method: 'POST', credentials: API_CREDENTIALS });
             if (!response.ok) { let m = 'Backup failed'; try { m = (await response.json()).error || m } catch { } throw Error(m) }
             const blob = await response.blob();
             const disp = response.headers.get('content-disposition') || '';
@@ -644,7 +660,9 @@ async function start() {
         }
     } catch { }
     try { branding = await api('/api/settings'); document.title = branding.appName || 'Field Attendance' } catch { }
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { });
+    if ('serviceWorker' in navigator && !window.Capacitor?.isNativePlatform?.()) {
+        navigator.serviceWorker.register('/sw.js').catch(() => { });
+    }
     try {
         const d = await api('/api/me');
         user = d.user;

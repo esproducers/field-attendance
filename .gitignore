@@ -117,3 +117,42 @@ pids/
 .stylelintcache
 .node_repl_history
 .yarn-integrity
+web/config.js
+
+# ============================================
+# Capacitor 原生工程 - 构建产物
+# ============================================
+# Android
+android/app/build/
+android/app/release/
+android/app/.cxx/
+android/.gradle/
+android/capacitor-cordova-android-plugins/build/
+android/app/src/main/assets/public/
+android/local.properties
+android/app/google-services.json
+
+# iOS
+ios/App/Pods/
+ios/App/DerivedData/
+ios/App/App/public/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/App/App.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+ios/App/App/GoogleService-Info.plist
+
+# ============================================
+# 密钥和签名（绝不提交）
+# ============================================
+*.keystore
+*.jks
+*.apk
+*.aab
+*.ipa
+*.p12
+*.mobileprovision
+# ============================================
+# 放行数据库 schema（覆盖上面的 *.sql）
+# ============================================
+!backend/sql/
+!backend/sql/*.sql

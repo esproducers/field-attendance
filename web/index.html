@@ -1,1 +1,25 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#14243b"><link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/styles.css"><title>Field Attendance</title></head><body><div id="app"></div><div id="toast" role="status" aria-live="polite"></div><script type="module" src="/app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta name="theme-color" content="#14243b">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+    <title>field-attendance</title>
+</head>
+
+<body>
+    <div id="app"></div>
+    <div id="toast" role="status" aria-live="polite"></div>
+
+    <!-- 1) 先加载 config（普通 script，同步执行，会在 app.js 之前跑完） -->
+    <script src="./config.js"></script>
+
+    <!-- 2) 再加载 app（module 天然 defer，保证在 config 之后执行） -->
+    <script type="module" src="./app.js"></script>
+</body>
+
+</html>
