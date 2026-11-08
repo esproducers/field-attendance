@@ -659,7 +659,6 @@ async function start() {
             if (p.status === 'Failed') { p.status = 'Pending'; delete p.error; await put('photos', p) }
         }
     } catch { }
-    try { branding = await api('/api/settings'); document.title = branding.appName || 'Field Attendance' } catch { }
     if ('serviceWorker' in navigator && !window.Capacitor?.isNativePlatform?.()) {
         navigator.serviceWorker.register('/sw.js').catch(() => { });
     }
@@ -670,6 +669,16 @@ async function start() {
     } catch {
         try { user = JSON.parse(localStorage.getItem('fa_user') || 'null') } catch { user = null }
     }
+    try {
+        const res = await api('/api/settings');
+        if (res && typeof res === 'object') {
+            branding = {
+                appName: res.appName || 'Field Attendance',
+                logo: res.logo || ''
+            };
+        }
+        document.title = branding.appName;
+    } catch { }
     if (user) await refresh(); else renderAuth();
     window.addEventListener('online', () => { toast('Connection restored. Retrying uploads...'); syncNow() });
     window.addEventListener('focus', () => { if (user) syncNow() });

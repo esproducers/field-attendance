@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "gen:config": "node -e \"require('fs').writeFileSync('web/config.js', 'window.__API_BASE_URL__=' + JSON.stringify(process.env.API_BASE_URL || '') + ';')\"",
+    "cap:sync": "npm run gen:config && npx cap sync"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1155.0",
     "@aws-sdk/s3-request-presigner": "^3.1155.0",

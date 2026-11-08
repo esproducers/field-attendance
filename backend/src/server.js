@@ -15,19 +15,10 @@ const execFileAsync = promisify(execFile);
 
 const app = Fastify({ logger: true, bodyLimit: 2_000_000 });
 await app.register(cors, {
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true);
-
-    if (origin === 'http://localhost' || origin === 'capacitor://localhost') {
-      return callback(null, true);
-    }
-
-    if (origin.includes('vercel.app') || origin === process.env.VERCEL_URL) {
-      return callback(null, true);
-    }
-
-    callback(new Error('CORS Not Allowed'));
-  },
+  origin: [
+    'https://localhost',        // Android App 的 Origin
+    'capacitor://localhost'     // iOS App 的 Origin
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
