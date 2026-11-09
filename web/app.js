@@ -324,6 +324,34 @@ function checkoutFormMarkup(r, clientOptions) {
 }
 
 async function openCamera(onDone) {
+    // 🌟 1. 如果是原生 App 环境，强制调起相机
+    if (window.Capacitor?.Plugins?.Camera) {
+        try {
+            const image = await window.Capacitor.Plugins.Camera.getPhoto({
+                quality: 80,
+                allowEditing: false,
+                resultType: 'base64',
+                source: 'CAMERA',          // 👈 核心：强制只打开相机
+                saveToGallery: false,      // 👈 核心：拍完照不保存到手机相册（防止篡改）
+                // 下面这两个可以删掉，因为 source 是 CAMERA，不会有相册选项
+                // promptLabelHeader: '拍照',
+                // promptLabelPicture: '拍照',
+                // promptLabelPhoto: '从相册选' 
+            });
+
+            if (image && image.base64String) {
+                const res = await fetch(`data:image/${image.format};base64,${image.base64String}`);
+                const blob = await res.blob();
+                const file = new File([blob], `camera-${Date.now()}.jpg`, { type: 'image/jpeg' });
+                onDone([file]);
+            }
+        } catch (e) {
+            toast('拍照已取消或失败');
+        }
+        return;
+    }
+
+    // （以下网页版代码保持不变，用于电脑端测试）
     if (!navigator.mediaDevices?.getUserMedia) { toast('Live camera requires a supported browser and HTTPS connection.'); return; }
     let stream, files = [];
     const bg = document.createElement('div'); bg.className = 'modalbg';
@@ -348,12 +376,22 @@ async function openCamera(onDone) {
 }
 
 function getGps(done) {
-    if (!navigator.geolocation) return toast('GPS not supported in this browser');
-    navigator.geolocation.getCurrentPosition(
-        p => done({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy }),
-        e => toast('GPS: ' + e.message),
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
+    // 🌟 如果是原生 App 环境，使用 Capacitor 插件
+    if (window.Capacitor?.Plugins?.Geolocation) {
+        window.Capacitor.Plugins.Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 15000 })
+            .then(p => {
+                done({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy });
+            })
+            .catch(e => toast('GPS Error: ' + (e.message || 'Permission denied')));
+    } else {
+        // 否则（网页版），退回使用浏览器原生的 GPS
+        if (!navigator.geolocation) return toast('GPS not supported in this browser');
+        navigator.geolocation.getCurrentPosition(
+            p => done({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy }),
+            e => toast('GPS: ' + e.message),
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+    }
 }
 
 async function compress(file) {
