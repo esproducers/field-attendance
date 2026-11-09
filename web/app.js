@@ -70,25 +70,32 @@ function layout(body) {
         <div id="mobile-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 998;"></div>
 
         <!-- 侧边栏：增加 padding-top 防止被状态栏遮挡 -->
+                <!-- 侧边栏 -->
         <aside class="sidebar" id="main-sidebar" style="
-            ${isMobile ? 'display: none; position: fixed; top: 0; left: 0; height: 100vh; z-index: 999; background: #14243b; overflow-y: auto; width: 260px; flex-direction: column; padding-top: 25px;' : ''}
+            ${isMobile ? 'display: none; position: fixed; top: 0; left: 0; height: 100vh; z-index: 999; background: #14243b; overflow-y: auto; width: 260px; flex-direction: column; padding-top: 10px;' : ''}
         ">
-            <!-- 品牌区域：极致紧凑版 -->
-            <div class="brand" style="padding: 10px 10px 20px 10px; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 0;">
+            <!-- 品牌区域：暴力压缩版 -->
+            <div class="brand" style="padding: 0 !important; margin: 0 !important; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; text-align: center; gap: 0;">
+                
                 ${branding.logo
-            ? `<img src="${branding.logo}" style="width: 160px; height: auto; max-width: 90%; object-fit: contain; margin-top: -10px;" alt="logo">`
-            : `<span style="display: inline-flex; align-items: center; justify-content: center; width: 120px; height: 120px; background: #22c55e; color: white; border-radius: 24px; font-size: 60px; flex-shrink: 0; margin-top: 10px;">✓</span>`
+            ? `<img src="${branding.logo}" style="height: 90px; width: auto; max-width: 95%; object-fit: contain; margin: -15px 0 -10px 0 !important; display: block;" alt="logo">`
+            : `<span style="display: inline-flex; align-items: center; justify-content: center; width: 90px; height: 90px; background: #22c55e; color: white; border-radius: 20px; font-size: 50px; flex-shrink: 0; margin: 0 0 5px 0;">✓</span>`
         }
-                <span style="word-break: break-word; white-space: normal; font-size: 22px; font-weight: 900; line-height: 1.2; letter-spacing: 0.5px; margin-top: 5px;">
+                
+                <!-- 强制文字紧凑 -->
+                <span style="word-break: break-word; white-space: normal; font-size: 20px; font-weight: 900; line-height: 1.2; letter-spacing: 0.5px; margin: 0 0 15px 0 !important; padding: 0 !important;">
                     ${esc(branding.appName || 'Field Attendance')}
                 </span>
             </div>
             
-            ${navItem('overview', '▦ Overview')}
-            ${navItem('records', '◷ Attendance Records')}
-            ${user.role === 'admin' ? navItem('users', '♙ User Management') + navItem('clients', '🏢 Clients') + navItem('audit', '☷ Audit Logs') + navItem('backup', '▣ Backup') : navItem('checkin', '⊕ Check In') + navItem('checkout', '⇥ Check Out') + navItem('clients', '🏢 Clients') + navItem('sync', '⇅ Offline Sync')}
-            ${navItem('settings', '⚙ Settings')}
-            <button class="nav" id="logout">↪ Sign Out</button>
+            <!-- 菜单列表 -->
+            <div style="display: flex; flex-direction: column; gap: 4px; padding: 0 10px;">
+                ${navItem('overview', '▦ Overview')}
+                ${navItem('records', '◷ Attendance Records')}
+                ${user.role === 'admin' ? navItem('users', '♙ User Management') + navItem('clients', '🏢 Clients') + navItem('audit', '☷ Audit Logs') + navItem('backup', '▣ Backup') : navItem('checkin', '⊕ Check In') + navItem('checkout', '⇥ Check Out') + navItem('clients', '🏢 Clients') + navItem('sync', '⇅ Offline Sync')}
+                ${navItem('settings', '⚙ Settings')}
+                <button class="nav" id="logout">↪ Sign Out</button>
+            </div>
         </aside>
         
         <!-- 主体内容 -->
