@@ -80,6 +80,15 @@ function layout(body) {
             : `<span style="display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: #22c55e; color: white; border-radius: 4px; font-size: 18px; flex-shrink: 0;">✓</span>`
         }
                 <span style="word-break: break-word; white-space: normal;">${esc(branding.appName || 'Field Attendance')}</span>
+            </div>            <!-- 品牌区域：Logo 居中在上，文字在下 -->
+            <div class="brand" style="padding: 30px 20px 20px 20px; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 12px;">
+                ${branding.logo
+            ? `<img src="${branding.logo}" style="width: 60px; height: 60px; object-fit: contain; border-radius: 8px; background: #fff; padding: 4px;" alt="logo">`
+            : `<span style="display: inline-flex; align-items: center; justify-content: center; width: 60px; height: 60px; background: #22c55e; color: white; border-radius: 12px; font-size: 32px; flex-shrink: 0;">✓</span>`
+        }
+                <span style="word-break: break-word; white-space: normal; font-size: 16px; font-weight: bold; line-height: 1.3;">
+                    ${esc(branding.appName || 'Field Attendance')}
+                </span>
             </div>
             
             ${navItem('overview', '▦ Overview')}
