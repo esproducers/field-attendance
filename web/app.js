@@ -71,15 +71,15 @@ function layout(body) {
 
         <!-- 侧边栏：增加 padding-top 防止被状态栏遮挡 -->
         <aside class="sidebar" id="main-sidebar" style="
-            ${isMobile ? 'display: none; position: fixed; top: 0; left: 0; height: 100vh; z-index: 999; background: #14243b; overflow-y: auto; width: 260px; flex-direction: column; padding-top: 50px;' : ''}
+            ${isMobile ? 'display: none; position: fixed; top: 0; left: 0; height: 100vh; z-index: 999; background: #14243b; overflow-y: auto; width: 260px; flex-direction: column; padding-top: 25px;' : ''}
         ">
-            <!-- 品牌区域：Logo 放大，间距缩短 -->
-            <div class="brand" style="padding: 30px 10px 20px 10px; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 8px;">
+            <!-- 品牌区域：极致紧凑版 -->
+            <div class="brand" style="padding: 10px 10px 20px 10px; color: #ffffff; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 0;">
                 ${branding.logo
-            ? `<img src="${branding.logo}" style="width: 150px; height: 150px; object-fit: contain;" alt="logo">`
-            : `<span style="display: inline-flex; align-items: center; justify-content: center; width: 150px; height: 150px; background: #22c55e; color: white; border-radius: 30px; font-size: 70px; flex-shrink: 0;">✓</span>`
+            ? `<img src="${branding.logo}" style="width: 160px; height: auto; max-width: 90%; object-fit: contain; margin-top: -10px;" alt="logo">`
+            : `<span style="display: inline-flex; align-items: center; justify-content: center; width: 120px; height: 120px; background: #22c55e; color: white; border-radius: 24px; font-size: 60px; flex-shrink: 0; margin-top: 10px;">✓</span>`
         }
-                <span style="word-break: break-word; white-space: normal; font-size: 26px; font-weight: 800; line-height: 1.2; letter-spacing: 0.5px; margin-top: 5px;">
+                <span style="word-break: break-word; white-space: normal; font-size: 22px; font-weight: 900; line-height: 1.2; letter-spacing: 0.5px; margin-top: 5px;">
                     ${esc(branding.appName || 'Field Attendance')}
                 </span>
             </div>
