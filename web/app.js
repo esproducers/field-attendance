@@ -155,62 +155,157 @@ async function showRecord(id) {
     const r = records.find(x => x.id === id);
     if (!r) return toast('Record not found');
 
+    const gpsIn = r.check_in_lat ? `${r.check_in_lat.toFixed(5)}, ${r.check_in_lng.toFixed(5)}` : 'N/A';
+    const gpsOut = r.check_out_lat ? `${r.check_out_lat.toFixed(5)}, ${r.check_out_lng.toFixed(5)}` : 'N/A';
+
     // 创建弹窗
     const bg = document.createElement('div'); bg.className = 'modalbg';
-    bg.innerHTML = `<div class="modal" style="max-height: 80vh; overflow-y: auto;">
-        <div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="close-record">Close</button></div>
+    bg.innerHTML = `<div class="modal" style="max-height: 90vh; overflow-y: auto; padding: 20px;">
         
-        <div class="status" style="margin-bottom: 15px; line-height: 1.6;">
-            <strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email || '')})<br>
-            <strong>Site:</strong> ${esc(r.location_name || r.site_name || 'N/A')}<br>
-            <strong>Check-in:</strong> ${fmt(r.check_in_device_at)}<br>
-            <strong>Check-out:</strong> ${fmt(r.check_out_device_at)}<br>
-            <strong>Status:</strong> ${pill(r.status)}<br>
-            <strong>Notes:</strong> ${esc(r.notes || 'None')}
+        <!-- 头部 Letterhead -->
+        <div style="text-align: center; border-bottom: 2px solid #14243b; padding-bottom: 15px; margin-bottom: 20px;">
+            ${branding.logo ? `<img src="${branding.logo}" style="max-height: 60px; margin-bottom: 10px;">` : ''}
+            <h1 style="color: #14243b; margin: 0; font-size: 24px;">${esc(branding.appName || 'Field Attendance')}</h1>
+            <div style="font-size: 14px; color: #666; margin-top: 5px;">Attendance Record</div>
         </div>
 
-        <h3>Photos</h3>
-        <div id="record-photos" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px;">
-            <div class="muted">Loading photos from B2...</div>
+        <!-- 基本信息 -->
+        <div style="font-size: 14px; line-height: 1.6; margin-bottom: 20px; background: #f8fafc; padding: 15px; border-radius: 8px;">
+            <div><strong>Worker:</strong> ${esc(r.full_name || user.full_name)} (${esc(r.email || '')})</div>
+            <div><strong>Site / Location:</strong> ${esc(r.location_name || r.site_name || 'N/A')}</div>
+            <div><strong>Status:</strong> ${pill(r.status)}</div>
+            ${r.notes ? `<div><strong>Notes:</strong> ${esc(r.notes)}</div>` : ''}
+        </div>
+
+        <!-- Check In Section -->
+        <div style="margin-bottom: 25px;">
+            <h3 style="color: #14243b; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-bottom: 10px;">Check In Information</h3>
+            <div style="font-size: 13px; margin-bottom: 10px;">
+                <strong>Time:</strong> ${fmt(r.check_in_device_at)} &nbsp;|&nbsp; <strong>GPS:</strong> ${gpsIn}
+            </div>
+            <div id="photos-in" style="display: flex; flex-wrap: wrap; gap: 10px;">
+                <div class="muted tiny">Loading photos...</div>
+            </div>
+        </div>
+
+        <!-- Check Out Section -->
+        ${r.check_out_device_at ? `
+        <div style="margin-bottom: 25px;">
+            <h3 style="color: #14243b; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-bottom: 10px;">Check Out Information</h3>
+            <div style="font-size: 13px; margin-bottom: 10px;">
+                <strong>Time:</strong> ${fmt(r.check_out_device_at)} &nbsp;|&nbsp; <strong>GPS:</strong> ${gpsOut}
+            </div>
+            <div id="photos-out" style="display: flex; flex-wrap: wrap; gap: 10px;">
+                <div class="muted tiny">Loading photos...</div>
+            </div>
+        </div>` : ''}
+
+        <!-- 底部操作按钮 -->
+        <div class="flex between" style="border-top: 1px solid #ddd; padding-top: 15px; margin-top: 10px;">
+            <button class="btn alt" id="close-record">Close</button>
+            <button class="btn" id="download-pdf" style="background: #2563eb;">⬇ Download PDF</button>
         </div>
     </div>`;
 
     document.body.append(bg);
 
-    // 关闭弹窗的逻辑
+    // 关闭事件
     bg.querySelector('#close-record').onclick = () => bg.remove();
     bg.onclick = e => { if (e.target === bg) bg.remove() };
 
-    // 异步拉取照片并显示
+    // 下载 PDF 事件
+    bg.querySelector('#download-pdf').onclick = async (e) => {
+        const btn = e.target;
+        btn.textContent = 'Generating...';
+        btn.disabled = true;
+        try {
+            const response = await fetch(apiUrl('/api/records/download-pdf'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: API_CREDENTIALS,
+                body: JSON.stringify({ recordId: r.id })
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                throw new Error(err.error || 'Failed to generate PDF');
+            }
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Attendance-${r.full_name || 'Record'}-${Date.now()}.pdf`;
+            document.body.append(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 30000);
+            toast('PDF downloaded successfully');
+        } catch (err) {
+            toast(err.message);
+        } finally {
+            btn.textContent = '⬇ Download PDF';
+            btn.disabled = false;
+        }
+    };
+
+    // 拉取照片并渲染
     try {
         const { photos } = await api(`/api/records/${id}/photos`);
-        const container = bg.querySelector('#record-photos');
-        container.innerHTML = '';
+        const containerIn = bg.querySelector('#photos-in');
+        const containerOut = bg.querySelector('#photos-out');
 
         if (!photos || !photos.length) {
-            container.innerHTML = '<div class="muted">No photos uploaded for this record.</div>';
+            containerIn.innerHTML = '<div class="muted tiny">No photos uploaded.</div>';
+            if (containerOut) containerOut.innerHTML = '<div class="muted tiny">No photos uploaded.</div>';
             return;
         }
 
-        for (const p of photos) {
-            try {
-                // 获取带签名的真实下载链接
-                const { downloadUrl } = await post('/api/get-download-url', { fileKey: p.url });
+        // 按 phase 分组
+        const groups = { location: [], before: [], checkout_location: [], after: [] };
+        photos.forEach(p => { if (groups[p.phase]) groups[p.phase].push(p); });
+
+        // 并行获取所有图片的签名 URL
+        const fetchUrls = photos.map(p => post('/api/get-download-url', { fileKey: p.url }).then(res => ({ ...p, downloadUrl: res.downloadUrl })));
+        const photosWithUrls = await Promise.all(fetchUrls);
+
+        const renderGroup = (container, phaseKey, label) => {
+            if (!container) return;
+            const list = photosWithUrls.filter(p => p.phase === phaseKey);
+            if (!list.length) return;
+
+            // 清空 loading
+            if (container.innerHTML.includes('Loading') || container.innerHTML.includes('No photos')) container.innerHTML = '';
+
+            // 添加小标题
+            const title = document.createElement('div');
+            title.style.width = '100%'; title.style.fontSize = '12px'; title.style.fontWeight = 'bold'; title.style.marginBottom = '5px';
+            title.textContent = label;
+            container.appendChild(title);
+
+            list.forEach(p => {
                 const img = document.createElement('img');
-                img.src = downloadUrl;
-                img.style.width = '130px';
-                img.style.height = '130px';
+                img.src = p.downloadUrl;
+                img.style.width = '90px';
+                img.style.height = '90px';
                 img.style.objectFit = 'cover';
-                img.style.borderRadius = '8px';
+                img.style.borderRadius = '4px';
                 img.style.border = '1px solid #ccc';
-                img.title = p.phase; // 鼠标悬停显示照片类型 (location, before, after 等)
+                img.style.cursor = 'pointer';
+                img.onclick = () => window.open(p.downloadUrl, '_blank');
                 container.appendChild(img);
-            } catch (err) {
-                console.error('Failed to load photo', err);
-            }
+            });
+        };
+
+        // 分别渲染 Check-in 的图片
+        renderGroup(containerIn, 'location', 'Location Photo');
+        renderGroup(containerIn, 'before', 'Before Photos');
+
+        // 分别渲染 Check-out 的图片
+        if (containerOut) {
+            renderGroup(containerOut, 'checkout_location', 'Checkout Location');
+            renderGroup(containerOut, 'after', 'After Photos');
         }
+
     } catch (e) {
-        bg.querySelector('#record-photos').innerHTML = '<div class="offline">Failed to load photos. Check network.</div>';
+        bg.querySelector('#photos-in').innerHTML = '<div class="offline tiny">Failed to load photos.</div>';
+        if (bg.querySelector('#photos-out')) bg.querySelector('#photos-out').innerHTML = '<div class="offline tiny">Failed to load photos.</div>';
     }
 }
 
