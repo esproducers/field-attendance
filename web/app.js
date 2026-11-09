@@ -151,6 +151,69 @@ function render() {
     }
 }
 
+async function showRecord(id) {
+    const r = records.find(x => x.id === id);
+    if (!r) return toast('Record not found');
+
+    // 创建弹窗
+    const bg = document.createElement('div'); bg.className = 'modalbg';
+    bg.innerHTML = `<div class="modal" style="max-height: 80vh; overflow-y: auto;">
+        <div class="flex between"><h2>Attendance Details</h2><button class="btn alt" id="close-record">Close</button></div>
+        
+        <div class="status" style="margin-bottom: 15px; line-height: 1.6;">
+            <strong>Worker:</strong> ${esc(r.full_name)} (${esc(r.email || '')})<br>
+            <strong>Site:</strong> ${esc(r.location_name || r.site_name || 'N/A')}<br>
+            <strong>Check-in:</strong> ${fmt(r.check_in_device_at)}<br>
+            <strong>Check-out:</strong> ${fmt(r.check_out_device_at)}<br>
+            <strong>Status:</strong> ${pill(r.status)}<br>
+            <strong>Notes:</strong> ${esc(r.notes || 'None')}
+        </div>
+
+        <h3>Photos</h3>
+        <div id="record-photos" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px;">
+            <div class="muted">Loading photos from B2...</div>
+        </div>
+    </div>`;
+
+    document.body.append(bg);
+
+    // 关闭弹窗的逻辑
+    bg.querySelector('#close-record').onclick = () => bg.remove();
+    bg.onclick = e => { if (e.target === bg) bg.remove() };
+
+    // 异步拉取照片并显示
+    try {
+        const { photos } = await api(`/api/records/${id}/photos`);
+        const container = bg.querySelector('#record-photos');
+        container.innerHTML = '';
+
+        if (!photos || !photos.length) {
+            container.innerHTML = '<div class="muted">No photos uploaded for this record.</div>';
+            return;
+        }
+
+        for (const p of photos) {
+            try {
+                // 获取带签名的真实下载链接
+                const { downloadUrl } = await post('/api/get-download-url', { fileKey: p.url });
+                const img = document.createElement('img');
+                img.src = downloadUrl;
+                img.style.width = '130px';
+                img.style.height = '130px';
+                img.style.objectFit = 'cover';
+                img.style.borderRadius = '8px';
+                img.style.border = '1px solid #ccc';
+                img.title = p.phase; // 鼠标悬停显示照片类型 (location, before, after 等)
+                container.appendChild(img);
+            } catch (err) {
+                console.error('Failed to load photo', err);
+            }
+        }
+    } catch (e) {
+        bg.querySelector('#record-photos').innerHTML = '<div class="offline">Failed to load photos. Check network.</div>';
+    }
+}
+
 function editClient(id) {
     const c = clients.find(x => x.id === id); if (!c) return;
     const bg = document.createElement('div'); bg.className = 'modalbg';
