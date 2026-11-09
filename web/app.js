@@ -162,11 +162,9 @@ async function showRecord(id) {
     const bg = document.createElement('div'); bg.className = 'modalbg';
     bg.innerHTML = `<div class="modal" style="max-height: 90vh; overflow-y: auto; padding: 20px;">
         
-        <!-- 头部 Letterhead -->
+        <!-- 头部 Letterhead (只显示 Attendance Record) -->
         <div style="text-align: center; border-bottom: 2px solid #14243b; padding-bottom: 15px; margin-bottom: 20px;">
-            ${branding.logo ? `<img src="${branding.logo}" style="max-height: 60px; margin-bottom: 10px;">` : ''}
-            <h1 style="color: #14243b; margin: 0; font-size: 24px;">${esc(branding.appName || 'Field Attendance')}</h1>
-            <div style="font-size: 14px; color: #666; margin-top: 5px;">Attendance Record</div>
+            <h1 style="color: #14243b; margin: 0; font-size: 24px;">Attendance Record</h1>
         </div>
 
         <!-- 基本信息 -->
