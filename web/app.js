@@ -63,9 +63,86 @@ function brandMarkup() { return `${branding.logo ? `<img class="brand-logo" src=
 function navItem(k, label) { return `<button class="nav ${view === k ? 'active' : ''}" data-view="${k}">${label}</button>` }
 
 function layout(body) {
-    app().innerHTML = `<div class="shell"><aside class="sidebar"><div class="brand">${brandMarkup()}</div>${navItem('overview', '▦ Overview')}${navItem('records', '◷ Attendance Records')}${user.role === 'admin' ? navItem('users', '♙ User Management') + navItem('clients', '🏢 Clients') + navItem('audit', '☷ Audit Logs') + navItem('backup', '▣ Backup') : navItem('checkin', '⊕ Check In') + navItem('checkout', '⇥ Check Out') + navItem('clients', '🏢 Clients') + navItem('sync', '⇅ Offline Sync')}${navItem('settings', '⚙ Settings')}<button class="nav" id="logout">↪ Sign Out</button></aside><main class="main"><div class="top"><div><h1>${({ overview: 'Dashboard', records: 'Attendance Records', users: 'User Management', clients: 'Client Management', audit: 'Audit Logs', backup: 'Backup', check: 'Check In / Out', checkin: 'Check In', checkout: 'Check Out', sync: 'Offline Sync', settings: 'Settings' })[view]}</h1><div class="muted tiny">${esc(user.full_name)} · ${esc(user.role)} · <span class="${navigator.onLine ? '' : 'offline'}">${navigator.onLine ? 'Online' : 'Offline'}</span></div></div><button class="btn alt" id="refresh">↻ Refresh</button></div>${body}</main></div>`;
-    document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { view = b.dataset.view; render() });
-    $('#logout').onclick = async () => { try { await api('/api/logout', { method: 'POST' }) } catch { } user = null; localStorage.removeItem('fa_user'); renderAuth() };
+    app().innerHTML = `
+    <div class="shell">
+        <!-- 移动端汉堡菜单按钮 -->
+        <button id="mobile-menu-btn" style="display: none; position: fixed; top: 12px; left: 12px; z-index: 1001; padding: 6px 10px; background: #fff; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.1); color: #14243b; font-weight: bold;">☰ Menu</button>
+        
+        <!-- 侧边栏（加上 id 以便 JS 控制） -->
+        <aside class="sidebar" id="main-sidebar">
+            <div class="brand">${brandMarkup()}</div>
+            ${navItem('overview', '▦ Overview')}
+            ${navItem('records', '◷ Attendance Records')}
+            ${user.role === 'admin' ? navItem('users', '♙ User Management') + navItem('clients', '🏢 Clients') + navItem('audit', '☷ Audit Logs') + navItem('backup', '▣ Backup') : navItem('checkin', '⊕ Check In') + navItem('checkout', '⇥ Check Out') + navItem('clients', '🏢 Clients') + navItem('sync', '⇅ Offline Sync')}
+            ${navItem('settings', '⚙ Settings')}
+            <button class="nav" id="logout">↪ Sign Out</button>
+        </aside>
+        
+        <!-- 主体内容 -->
+        <main class="main">
+            <div class="top">
+                <div>
+                    <h1>${({ overview: 'Dashboard', records: 'Attendance Records', users: 'User Management', clients: 'Client Management', audit: 'Audit Logs', backup: 'Backup', check: 'Check In / Out', checkin: 'Check In', checkout: 'Check Out', sync: 'Offline Sync', settings: 'Settings' })[view]}</h1>
+                    <div class="muted tiny">${esc(user.full_name)} · ${esc(user.role)} · <span class="${navigator.onLine ? '' : 'offline'}">${navigator.onLine ? 'Online' : 'Offline'}</span></div>
+                </div>
+                <button class="btn alt" id="refresh">↻ Refresh</button>
+            </div>
+            ${body}
+        </main>
+    </div>`;
+
+    const sidebar = $('#main-sidebar');
+    const menuBtn = $('#mobile-menu-btn');
+
+    // 🌟 1. 检测屏幕宽度，控制汉堡按钮和侧边栏的显示
+    const checkMobile = () => {
+        if (window.innerWidth <= 768) {
+            menuBtn.style.display = 'block'; // 手机端显示菜单按钮
+            if (!sidebar.classList.contains('open')) {
+                sidebar.style.display = 'none'; // 默认隐藏侧边栏
+            }
+        } else {
+            menuBtn.style.display = 'none'; // 电脑端隐藏菜单按钮
+            sidebar.style.display = '';     // 电脑端恢复侧边栏（走原本的 CSS 样式）
+            sidebar.classList.remove('open');
+        }
+    };
+    checkMobile();
+    window.onresize = checkMobile;
+
+    // 🌟 2. 点击 Menu 按钮，打开/关闭侧边栏
+    menuBtn.onclick = () => {
+        if (sidebar.style.display === 'none') {
+            sidebar.style.display = 'flex'; // 显示
+            sidebar.style.flexDirection = 'column';
+            sidebar.style.position = 'fixed';
+            sidebar.style.top = '0'; left = '0';
+            sidebar.style.left = '0';
+            sidebar.style.height = '100vh';
+            sidebar.style.width = '250px';
+            sidebar.style.zIndex = '999';
+            sidebar.style.backgroundColor = '#14243b';
+            sidebar.style.overflowY = 'auto';
+            sidebar.classList.add('open');
+        } else {
+            sidebar.style.display = 'none'; // 隐藏
+            sidebar.classList.remove('open');
+        }
+    };
+
+    // 🌟 3. 点击菜单里的任意功能后，自动关闭侧边栏
+    document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
+        view = b.dataset.view;
+        if (window.innerWidth <= 768 && sidebar.classList.contains('open')) {
+            menuBtn.click(); // 触发一次关闭
+        }
+        render()
+    });
+
+    $('#logout').onclick = async () => {
+        try { await api('/api/logout', { method: 'POST' }) } catch { }
+        user = null; localStorage.removeItem('fa_user'); renderAuth()
+    };
     $('#refresh').onclick = refresh;
 }
 
