@@ -39,6 +39,20 @@ async function requireAdmin(req) {
 
 // ================= 3. 主入口逻辑 =================
 export default async function handler(req, res) {
+    // 🌟 1. 统一处理 CORS 跨域（修复 App 报错核心代码）
+    const origin = req.headers.origin;
+    if (origin && (origin === 'https://localhost' || origin === 'capacitor://localhost' || origin === 'http://localhost')) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    // 🌟 2. 拦截 OPTIONS 预检请求（直接放行，不进入业务逻辑）
+    if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+    }
+
     const url = new URL(req.url, `http://${req.headers.host}`);
     const path = url.pathname.replace(/\/$/, '');
     const method = req.method;
@@ -227,7 +241,9 @@ async function handleSignup(req, res) {
         const u = r.rows[0];
         const token = randomBytes(32).toString('hex');
         await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-        res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Lax`);
+
+        // 🌟 3. 修复 Cookie 跨域携带问题（SameSite=None; Secure）
+        res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=None; Secure`);
         return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
     } catch (e) {
         if (e.code === '23505') return res.status(409).json({ error: 'Email already registered' });
@@ -245,7 +261,9 @@ async function handleLogin(req, res) {
     }
     const token = randomBytes(32).toString('hex');
     await pool.query(`INSERT INTO sessions(user_id,token_hash,expires_at) VALUES ($1,$2,now()+interval '14 days')`, [u.id, tokenHash(token)]);
-    res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=Lax`);
+
+    // 🌟 4. 修复 Cookie 跨域携带问题（SameSite=None; Secure）
+    res.setHeader('Set-Cookie', `fa_session=${token}; HttpOnly; Path=/; Max-Age=${14 * 24 * 3600}; SameSite=None; Secure`);
     return res.status(200).json({ user: { id: u.id, email: u.email, full_name: u.full_name, role: u.role } });
 }
 
@@ -253,7 +271,7 @@ async function handleLogout(req, res) {
     const cookie = req.headers.cookie || '';
     const match = cookie.match(/fa_session=([^;]+)/);
     if (match) await pool.query('UPDATE sessions SET revoked_at=now() WHERE token_hash=$1', [tokenHash(match[1])]);
-    res.setHeader('Set-Cookie', 'fa_session=; HttpOnly; Path=/; Max-Age=0');
+    res.setHeader('Set-Cookie', 'fa_session=; HttpOnly; Path=/; Max-Age=0; SameSite=None; Secure');
     return res.status(200).json({ ok: true });
 }
 
