@@ -67,14 +67,17 @@ function layout(body) {
 
     app().innerHTML = `
     <div class="shell">
-        <!-- 手机端遮罩层 (点空白处关闭菜单) -->
         <div id="mobile-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 998;"></div>
 
-        <!-- 侧边栏 -->
+        <!-- 侧边栏：增加 padding-top 防止被状态栏遮挡 -->
         <aside class="sidebar" id="main-sidebar" style="
-            ${isMobile ? 'display: none; position: fixed; top: 0; left: 0; height: 100vh; z-index: 999; background: #14243b; overflow-y: auto; width: 260px; flex-direction: column;' : ''}
+            ${isMobile ? 'display: none; position: fixed; top: 0; left: 0; height: 100vh; z-index: 999; background: #14243b; overflow-y: auto; width: 260px; flex-direction: column; padding-top: 50px;' : ''}
         ">
-            <div class="brand" style="padding: 20px;">${brandMarkup()}</div>
+            <!-- 品牌区域：强制白色字体，确保在深色背景下可见 -->
+            <div class="brand" style="padding: 10px 20px 20px 20px; color: #ffffff; display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: bold;">
+                ${brandMarkup()}
+            </div>
+            
             ${navItem('overview', '▦ Overview')}
             ${navItem('records', '◷ Attendance Records')}
             ${user.role === 'admin' ? navItem('users', '♙ User Management') + navItem('clients', '🏢 Clients') + navItem('audit', '☷ Audit Logs') + navItem('backup', '▣ Backup') : navItem('checkin', '⊕ Check In') + navItem('checkout', '⇥ Check Out') + navItem('clients', '🏢 Clients') + navItem('sync', '⇅ Offline Sync')}
@@ -84,12 +87,8 @@ function layout(body) {
         
         <!-- 主体内容 -->
         <main class="main" style="${isMobile ? 'padding: 15px;' : ''}">
-            <!-- 顶部栏：包含菜单按钮、标题、刷新按钮 -->
             <div class="top" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; gap: 10px;">
-                
-                <!-- 左侧：菜单按钮 + 标题 -->
                 <div style="display: flex; align-items: center; gap: 12px; overflow: hidden;">
-                    <!-- 手机端菜单按钮 -->
                     <button id="mobile-menu-btn" style="
                         display: ${isMobile ? 'flex' : 'none'}; 
                         padding: 8px 12px; 
@@ -103,7 +102,6 @@ function layout(body) {
                         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
                     ">☰</button>
                     
-                    <!-- 标题区域 -->
                     <div style="min-width: 0;">
                         <h1 style="margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 20px;">
                             ${({ overview: 'Dashboard', records: 'Attendance Records', users: 'User Management', clients: 'Client Management', audit: 'Audit Logs', backup: 'Backup', check: 'Check In / Out', checkin: 'Check In', checkout: 'Check Out', sync: 'Offline Sync', settings: 'Settings' })[view]}
@@ -113,12 +111,8 @@ function layout(body) {
                         </div>
                     </div>
                 </div>
-
-                <!-- 右侧：刷新按钮 -->
                 <button class="btn alt" id="refresh" style="flex-shrink: 0; padding: 8px 12px;">↻ Refresh</button>
             </div>
-            
-            <!-- 页面主要内容 -->
             ${body}
         </main>
     </div>`;
@@ -127,7 +121,6 @@ function layout(body) {
     const overlay = $('#mobile-overlay');
     const menuBtn = $('#mobile-menu-btn');
 
-    // 打开/关闭侧边栏
     const toggleMenu = () => {
         const isOpen = sidebar.style.display === 'flex';
         if (isOpen) {
@@ -139,13 +132,9 @@ function layout(body) {
         }
     };
 
-    // 绑定菜单按钮点击事件
     if (menuBtn) menuBtn.onclick = toggleMenu;
-
-    // 点击遮罩层关闭菜单
     if (overlay) overlay.onclick = toggleMenu;
 
-    // 点击导航选项后自动关闭菜单
     document.querySelectorAll('[data-view]').forEach(b => b.onclick = () => {
         view = b.dataset.view;
         if (isMobile && sidebar.style.display === 'flex') toggleMenu();
@@ -254,7 +243,7 @@ async function showRecord(id) {
         
         <!-- 头部 Letterhead (只显示 Attendance Record) -->
         <div style="text-align: center; border-bottom: 2px solid #14243b; padding-bottom: 15px; margin-bottom: 20px;">
-            <h1 style="color: #14243b; margin: 0; font-size: 24px;">Attendance Record</h1>
+            <h1 style="color: #14243b; margin: 0; font-size: 34px;">Attendance Record</h1>
         </div>
 
         <!-- 基本信息 -->
